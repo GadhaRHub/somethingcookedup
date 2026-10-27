@@ -69,6 +69,7 @@ LEGEND_LOCATIONS = [
     "center left", "center right", "lower center", "upper center", "center",
 ]
 
+PLOT_BACKGROUNDS = ["Grid", "Plain"]
 MINOR_TICKS = ["Off", "Auto", "2", "4", "5", "10"]  # subdivisions between major ticks
 TICK_DIRECTIONS = {"Outside": "out", "Inside": "in", "Both": "inout"}
 MAX_TICKS = 500
@@ -167,6 +168,7 @@ class PlotTab(QWidget):
         self.data_preview: DataPreview | None = None
         self._export_theme: theme.Theme | None = None
         self._export_font: float | None = None
+        self._export_grid: bool | None = None
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -402,10 +404,12 @@ class PlotTab(QWidget):
         self.accent_axes.toggled.connect(lambda _: self.redraw())
         form.addRow(self.accent_axes)
 
-        self.grid_check = QCheckBox("Show grid")
-        self.grid_check.setChecked(True)
-        self.grid_check.toggled.connect(lambda _: self.redraw())
-        form.addRow(self.grid_check)
+        self.plot_background = QComboBox()
+        self.plot_background.addItems(PLOT_BACKGROUNDS)
+        self.plot_background.setToolTip("Plain: no gridlines. Grid: gridlines at the major ticks\n"
+                                        "(minor gridlines can be added under Ticks).")
+        self.plot_background.currentTextChanged.connect(lambda _: self.redraw())
+        form.addRow("Background", self.plot_background)
         return box
 
     def _build_axes_group(self) -> QGroupBox:
@@ -515,7 +519,7 @@ class PlotTab(QWidget):
         for side in ("top", "right"):
             ax.spines[side].set_visible(mirror)
             ax.spines[side].set_color(ax.spines["left"].get_edgecolor())
-        if self.grid_check.isChecked() and self.minor_grid.isChecked():
+        if self._grid_on() and self.minor_grid.isChecked():
             ax.grid(True, which="minor", color=t.border, alpha=0.35 if t.dark else 0.18, linewidth=0.6)
 
     def _build_marks_group(self) -> QGroupBox:
@@ -775,6 +779,11 @@ class PlotTab(QWidget):
     def _draw_theme(self) -> theme.Theme:
         return self._export_theme or theme.current
 
+    def _grid_on(self) -> bool:
+        if self._export_grid is not None:
+            return self._export_grid
+        return self.plot_background.currentText() == "Grid"
+
     def _font(self) -> float:
         return self._export_font or self.font_size.value()
 
@@ -841,7 +850,7 @@ class PlotTab(QWidget):
             ax.tick_params(which="both", colors=t.accent)
             for text in (ax.title, ax.xaxis.label, ax.yaxis.label):
                 text.set_color(t.accent)
-        if self.grid_check.isChecked():
+        if self._grid_on():
             ax.grid(True, color=t.border, alpha=0.6 if t.dark else 0.3)
         self._legend_map = {}
         if self.legend_check.isChecked() and lines:
@@ -1113,14 +1122,15 @@ class PlotTab(QWidget):
         self._after_marks_changed()  # refresh the marks list and redraw
 
     @contextmanager
-    def export_style(self, draw_theme: theme.Theme, font_size: float | None):
-        """Temporarily redraw with another theme and font size (for export)."""
-        self._export_theme, self._export_font = draw_theme, font_size
+    def export_style(self, draw_theme: theme.Theme, font_size: float | None,
+                     grid: bool | None = None):
+        """Temporarily redraw with another theme, font size and grid setting (for export)."""
+        self._export_theme, self._export_font, self._export_grid = draw_theme, font_size, grid
         try:
             self.redraw()
             yield
         finally:
-            self._export_theme = self._export_font = None
+            self._export_theme = self._export_font = self._export_grid = None
             self.redraw()
 
     def apply_toolbar_icons(self) -> None:

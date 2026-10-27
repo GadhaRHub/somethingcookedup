@@ -240,3 +240,37 @@ def test_export_preview(window):
     assert abs(pixmap.width() / pixmap.height() - 16 / 9) < 0.05
     assert tuple(tab.figure.get_size_inches()) == before
     dialog.reject()
+
+
+def test_plain_and_grid_background(window, tmp_path):
+    from csvplot.export import save_figure
+
+    tab = window.current_tab()
+
+    def gridlines_visible():
+        return any(line.get_visible() for line in tab.ax.get_xgridlines())
+
+    assert tab.plot_background.currentText() == "Grid" and gridlines_visible()
+    tab.plot_background.setCurrentText("Plain")
+    assert not gridlines_visible()
+
+    # The export can override the on-screen choice without changing it.
+    seen = []
+    original = tab.export_style
+
+    def spy(*args):
+        ctx = original(*args)
+
+        class Wrap:
+            def __enter__(self):
+                ctx.__enter__()
+                seen.append(gridlines_visible())
+
+            def __exit__(self, *exc):
+                return ctx.__exit__(*exc)
+
+        return Wrap()
+
+    save_figure(tab.figure, str(tmp_path / "g.png"), (4, 3), 100, "White", spy, grid=True)
+    assert seen == [True]
+    assert tab.plot_background.currentText() == "Plain" and not gridlines_visible()

@@ -47,10 +47,10 @@ You can also drag files onto the window.
   Hidden lines stay in the legend, faded.
 - **Colours**: choose a colour per series, or colour all series from a **colormap**
   (Berry, Forest, viridis, plasma, turbo, coolwarm, tab10, …, can be reversed).
-  You can also set the title, axis labels, font size, legend on/off and position,
-  and the grid.
+  You can also set the title, axis labels, font size, and legend on/off and position.
+  The plot background can be *Grid* or *Plain*.
 - **Ticks**: set the major tick step and the number of minor subdivisions (Off, Auto,
-  2, 4, 5, 10) for each axis. You can also set the tick direction (outside, inside or
+  2, 4, 5, 10) for each axis, and the width and length of major and minor ticks. You can also set the tick direction (outside, inside or
   both), put ticks on all four sides for a boxed, journal-style frame, and turn on
   minor gridlines.
 - **Axis ranges**: type the min/max values and Apply, or use Auto-fit. The boxes
@@ -58,7 +58,9 @@ You can also drag files onto the window.
 - **High-quality export** (File → Export figure, Ctrl+S, or the toolbar's save icon):
   PNG, TIFF or JPEG at 150–1200 dpi, or vector SVG, PDF or EPS. Set the output size
   in cm or inches and choose a white, theme-coloured or transparent background.
-  The app remembers your last settings. Optional **presets** (journal single, 1.5 or
+  The export can use a plain or grid plot area regardless of the on-screen choice,
+  and a live **preview** shows the figure exactly as it will be saved. The app
+  remembers your last settings. Optional **presets** (journal single, 1.5 or
   double column, 16:9 or 4:3 slide, poster panel) set the size, resolution and font
   size in one click. Exports from the dark theme on a white or transparent
   background automatically use dark text.

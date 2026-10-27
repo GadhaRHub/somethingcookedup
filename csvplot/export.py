@@ -51,7 +51,9 @@ PRESETS = {
     "Poster panel (30 × 20 cm)": (30.0, 20.0, 300, 24),
 }
 
-Restyle = Callable[[theme.Theme, "float | None"], ContextManager]
+# restyle(theme, font_size, grid) -> context manager that redraws the plot
+Restyle = Callable[[theme.Theme, "float | None", "bool | None"], ContextManager]
+PLOT_AREA = {"As on screen": None, "Grid": True, "Plain": False}
 
 
 PREVIEW_W, PREVIEW_H = 460, 360
@@ -95,6 +97,9 @@ class ExportDialog(QDialog):
 
         self.background = QComboBox()
         self.background.addItems(BACKGROUNDS)
+        self.plot_area = QComboBox()
+        self.plot_area.addItems(PLOT_AREA)
+        self.plot_area.setToolTip("Plain or grid plot background for the exported file only.")
         self.info = QLabel()
         self.info.setStyleSheet(f"color: {theme.current.muted};")
 
@@ -114,6 +119,7 @@ class ExportDialog(QDialog):
         form.addRow("Size", size_row)
         form.addRow("Font size", self.font_size)
         form.addRow("Background", self.background)
+        form.addRow("Plot area", self.plot_area)
         form.addRow(self.info)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -152,7 +158,7 @@ class ExportDialog(QDialog):
             spin.valueChanged.connect(self._preset_edited)
         for spin in (self.width, self.height, self.font_size):
             spin.valueChanged.connect(self._schedule_preview)
-        for combo in (self.background, self.units):
+        for combo in (self.background, self.units, self.plot_area):
             combo.currentTextChanged.connect(self._schedule_preview)
         self._schedule_preview()
 
@@ -167,7 +173,7 @@ class ExportDialog(QDialog):
         buffer = BytesIO()
         try:
             save_figure(self.figure, buffer, (w_in, h_in), dpi, self.background.currentText(),
-                        self.restyle, self.export_font_size, fmt="png")
+                        self.restyle, self.export_font_size, fmt="png", grid=self.export_grid)
         except Exception as exc:  # noqa: BLE001 - show the problem instead of a preview
             self.preview.setText(f"Preview failed:\n{exc}")
             return
@@ -208,6 +214,7 @@ class ExportDialog(QDialog):
         self.units.setCurrentText(s.value("export/units", "cm"))
         self.units.blockSignals(False)
         self.background.setCurrentText(s.value("export/background", "White"))
+        self.plot_area.setCurrentText(s.value("export/plot_area", "As on screen"))
         self.dpi.setValue(int(s.value("export/dpi", 300)))
         # Default size: what is on screen now.
         w_in, h_in = self.figure.get_size_inches()
@@ -223,6 +230,7 @@ class ExportDialog(QDialog):
         s.setValue("export/units", self.units.currentText())
         s.setValue("export/background", self.background.currentText())
         s.setValue("export/dpi", self.dpi.value())
+        s.setValue("export/plot_area", self.plot_area.currentText())
 
     def _factor(self) -> float:
         return CM_PER_INCH if self.units.currentText() == "cm" else 1.0
@@ -261,6 +269,10 @@ class ExportDialog(QDialog):
         return self.width.value() / f, self.height.value() / f
 
     @property
+    def export_grid(self) -> bool | None:
+        return PLOT_AREA[self.plot_area.currentText()]
+
+    @property
     def export_font_size(self) -> float | None:
         return self.font_size.value() or None
 
@@ -284,7 +296,7 @@ class ExportDialog(QDialog):
 
 def save_figure(figure: Figure, path: "str | BytesIO", size_inches, dpi: float, background: str,
                 restyle: Restyle | None = None, font_size: float | None = None,
-                fmt: str | None = None) -> None:
+                fmt: str | None = None, grid: bool | None = None) -> None:
     """Write ``figure`` to ``path`` at the given size and resolution.
 
     ``restyle(theme, font_size)`` is a context manager that temporarily redraws
@@ -300,8 +312,8 @@ def save_figure(figure: Figure, path: "str | BytesIO", size_inches, dpi: float, 
     else:
         kwargs["facecolor"] = "white" if background == "White" else theme.current.card
     draw_theme = theme.export_theme(background)
-    needs_restyle = font_size is not None or draw_theme is not theme.current
-    context = restyle(draw_theme, font_size) if restyle and needs_restyle else nullcontext()
+    needs_restyle = font_size is not None or grid is not None or draw_theme is not theme.current
+    context = restyle(draw_theme, font_size, grid) if restyle and needs_restyle else nullcontext()
     # Some styling (e.g. gridlines) is resolved at save time, so keep the
     # export theme's rcParams active while writing.
     with context, matplotlib.rc_context(theme.mpl_rc(draw_theme)):
@@ -338,7 +350,8 @@ def export_figure(figure: Figure, default_name: str, parent=None,
         return None
     try:
         save_figure(figure, path, dialog.size_inches(), dialog.dpi.value(),
-                    dialog.background.currentText(), restyle, dialog.export_font_size)
+                    dialog.background.currentText(), restyle, dialog.export_font_size,
+                    grid=dialog.export_grid)
     except Exception as exc:  # noqa: BLE001 - surface any writer error
         QMessageBox.warning(parent, "Export failed", f"Could not save {path}\n\n{exc}")
         return None
