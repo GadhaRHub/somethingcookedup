@@ -33,6 +33,9 @@ class Theme:
     muted: str
     series_colors: tuple[str, ...]
     cmap_colors: tuple[str, ...]
+    input: str = "#FFFFFF"   # text fields, tables, legend background
+    dark: bool = False
+    light_variant: str = ""  # theme used for white-background exports of a dark theme
 
 
 THEMES = {
@@ -55,6 +58,17 @@ THEMES = {
         series_colors=("#D98327", "#186049", "#4A943E", "#8C5A9E", "#2E6FA3",
                        "#B0413E", "#C9A227", "#1F8A8A", "#E86AB8", "#6B6B6B"),
         cmap_colors=("#186049", "#4A943E", "#D98327"),
+    ),
+    "Night": Theme(
+        name="Night",
+        bar="#2B0A22", bar_text="#F2EEE5",
+        accent="#E0249C", accent_hover="#C81C8A", check="#E0249C",
+        soft="#4A3366", soft_light="#352845", border="#4A3A58", deep="#B79BEB",
+        bg="#17131A", card="#221C27", text="#EEE6F2", muted="#9D90A6",
+        series_colors=("#F03CA8", "#B794F6", "#F0A14A", "#2BB3B1", "#5AA9E6",
+                       "#7CC36A", "#F06A6A", "#E6C14A", "#E86AB8", "#B0A8B4"),
+        cmap_colors=("#B794F6", "#E0249C", "#F0A14A"),
+        input="#1B161F", dark=True, light_variant="Berry",
     ),
 }
 
@@ -108,10 +122,17 @@ def register_colormaps() -> None:
             matplotlib.colormaps.register(LinearSegmentedColormap.from_list(t.name, list(t.cmap_colors)))
 
 
-def apply_matplotlib_style(t: Theme | None = None) -> None:
+def export_theme(background: str) -> Theme:
+    """Theme to draw with when exporting: dark themes switch to their light
+    variant unless the figure keeps the theme's own background."""
+    if current.dark and background != "Theme colour":
+        return THEMES[current.light_variant]
+    return current
+
+
+def mpl_rc(t: Theme | None = None) -> dict:
     t = t or current
-    register_colormaps()
-    matplotlib.rcParams.update({
+    return {
         "figure.facecolor": t.card,
         "axes.facecolor": t.card,
         "axes.edgecolor": t.text,
@@ -124,11 +145,17 @@ def apply_matplotlib_style(t: Theme | None = None) -> None:
         "xtick.color": t.text,
         "ytick.color": t.text,
         "grid.color": t.border,
-        "legend.facecolor": "white",
+        "legend.facecolor": t.input,
         "legend.edgecolor": t.border,
+        "legend.labelcolor": t.text,
         "legend.framealpha": 0.92,
         "savefig.facecolor": "white",
-    })
+    }
+
+
+def apply_matplotlib_style(t: Theme | None = None) -> None:
+    register_colormaps()
+    matplotlib.rcParams.update(mpl_rc(t))
 
 
 def stylesheet(t: Theme | None = None) -> str:
@@ -180,6 +207,8 @@ def stylesheet(t: Theme | None = None) -> str:
     QTabBar::close-button:selected {{ image: url({icon["close-light"]}); }}
     QTabBar::close-button:hover {{ background: {_rgba(t.text, 0.15)}; }}
 
+    QTabWidget#views QTabBar::tab {{ margin-top: 0; margin-bottom: 8px; padding: 6px 14px; }}
+    QTabWidget#views QTabBar::tab:first {{ margin-left: 0; }}
     QFrame#card {{ background: {t.card}; border: 1px solid {t.border}; border-radius: 18px; }}
     QLabel#empty_state {{
         background: {t.card}; border: 2px dashed {t.border}; border-radius: 24px;
@@ -197,7 +226,7 @@ def stylesheet(t: Theme | None = None) -> str:
     }}
 
     QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox {{
-        background: white; border: 1px solid {t.border}; border-radius: 9px;
+        background: {t.input}; border: 1px solid {t.border}; border-radius: 9px;
         padding: 4px 8px; min-height: 20px;
         selection-background-color: {t.accent}; selection-color: white;
     }}
@@ -206,7 +235,7 @@ def stylesheet(t: Theme | None = None) -> str:
     QComboBox::drop-down {{ border: none; width: 24px; }}
     QComboBox::down-arrow {{ image: url({icon["down"]}); width: 11px; height: 11px; }}
     QComboBox QAbstractItemView {{
-        background: white; border: 1px solid {t.border}; padding: 4px; outline: 0;
+        background: {t.input}; border: 1px solid {t.border}; padding: 4px; outline: 0;
         selection-background-color: {t.soft}; selection-color: {t.text};
     }}
     QDoubleSpinBox::up-button, QDoubleSpinBox::down-button, QSpinBox::up-button, QSpinBox::down-button {{
@@ -223,7 +252,7 @@ def stylesheet(t: Theme | None = None) -> str:
     }}
     QPushButton:hover {{ background: {t.accent_hover}; }}
     QPushButton:pressed {{ background: {t.text}; }}
-    QPushButton[secondary="true"] {{ background: white; color: {t.text}; border: 1px solid {t.border}; }}
+    QPushButton[secondary="true"] {{ background: {t.input}; color: {t.text}; border: 1px solid {t.border}; }}
     QPushButton[secondary="true"]:hover {{ background: {t.soft_light}; }}
     QPushButton[secondary="true"]:pressed {{ background: {t.soft}; }}
     QMessageBox QPushButton {{ min-width: 70px; }}
@@ -231,7 +260,7 @@ def stylesheet(t: Theme | None = None) -> str:
     QCheckBox {{ spacing: 8px; }}
     QCheckBox::indicator, QTableView::indicator {{
         width: 16px; height: 16px; border: 1px solid {t.deep};
-        border-radius: 5px; background: white;
+        border-radius: 5px; background: {t.input};
     }}
     QCheckBox::indicator:checked, QTableView::indicator:checked {{
         background: {t.check}; border-color: {t.check}; image: url({icon["check"]});
@@ -240,13 +269,13 @@ def stylesheet(t: Theme | None = None) -> str:
     QCheckBox::indicator:disabled {{ background: {t.bg}; border-color: {t.border}; }}
     QCheckBox:disabled {{ color: {t.muted}; }}
 
-    QTableWidget, QListWidget {{
-        background: white; border: 1px solid {t.border}; border-radius: 12px;
-        padding: 2px; outline: 0;
+    QTableWidget, QListWidget, QTableView {{
+        background: {t.input}; border: 1px solid {t.border}; border-radius: 12px;
+        padding: 2px; outline: 0; gridline-color: {t.border};
     }}
     QListWidget::item {{ padding: 4px 6px; border-radius: 6px; }}
     QListWidget::item:selected {{ background: {t.soft}; color: {t.text}; }}
-    QTableWidget::item:selected {{ background: {t.soft_light}; color: {t.text}; }}
+    QTableView::item:selected {{ background: {t.soft_light}; color: {t.text}; }}
     QHeaderView {{ background: transparent; }}
     QHeaderView::section {{
         background: {t.soft_light}; color: {t.text}; border: none;
@@ -273,6 +302,7 @@ def stylesheet(t: Theme | None = None) -> str:
     }}
     QFrame#card QToolButton:hover {{ background: {t.soft_light}; }}
     QFrame#card QToolButton:checked {{ background: {t.soft}; }}
+    QFrame#card QToolBar::separator {{ background: {t.border}; width: 1px; margin: 6px 8px; }}
     QFrame#card QToolBar QLabel {{ color: {t.muted}; }}
     QLabel#coords {{
         background: {t.bg}; border-radius: 10px; padding: 6px 12px;

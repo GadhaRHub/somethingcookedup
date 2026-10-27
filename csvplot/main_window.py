@@ -132,6 +132,12 @@ class MainWindow(QMainWindow):
         self.act_detach = action("&Detach plot to window", self.detach_current, "Ctrl+D",
                                  "Move the current plot into its own movable window")
         self.act_controls = action("Show/hide &controls panel", self.toggle_controls, "Ctrl+B")
+        self.act_data = action("Show/hide &data table", self.toggle_data, "Ctrl+T",
+                               "Show the current file's raw values in a tab next to the plot")
+        self.act_data_auto = QAction("Open data table with new &files", self, checkable=True)
+        self.act_data_auto.setStatusTip("Also open the data table automatically when a file is opened")
+        self.act_data_auto.setChecked(self.settings.value("data_table_auto", False, type=bool))
+        self.act_data_auto.toggled.connect(lambda on: self.settings.setValue("data_table_auto", on))
         self.act_help = action("&Mouse controls", self.show_help, QKeySequence.HelpContents)
         self.act_about = action("&About", self.show_about)
 
@@ -142,6 +148,10 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.act_detach)
         view_menu.addAction(self.act_controls)
+        view_menu.addSeparator()
+        view_menu.addAction(self.act_data)
+        view_menu.addAction(self.act_data_auto)
+        view_menu.addSeparator()
         theme_menu = view_menu.addMenu("&Theme")
         self.theme_group = QActionGroup(self)
         for name, t in theme.THEMES.items():
@@ -189,7 +199,7 @@ class MainWindow(QMainWindow):
     def _update_actions(self, *_):
         has_tab = self.tabs.count() > 0
         for act in (self.act_add, self.act_save, self.act_close, self.act_detach, self.act_controls,
-                    self.act_rename_tab):
+                    self.act_rename_tab, self.act_data):
             act.setEnabled(has_tab)
         self.stack.setCurrentIndex(1 if has_tab else 0)
 
@@ -231,6 +241,8 @@ class MainWindow(QMainWindow):
                 continue
             tab = PlotTab(dataset)
             tab.statusMessage.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
+            if self.act_data_auto.isChecked():
+                tab.show_data_preview(focus=False)
             index = self.tabs.addTab(tab, tab.display_name)
             self.tabs.setTabToolTip(index, str(dataset.path))
             self.tabs.setCurrentIndex(index)
@@ -267,6 +279,10 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(index, "\n".join(str(d.path) for d in tab.datasets))
         self.tabs.setCurrentIndex(index)
         self._update_actions()
+
+    def toggle_data(self) -> None:
+        if (tab := self.current_tab()) is not None:
+            tab.toggle_data_preview()
 
     def toggle_controls(self) -> None:
         if (tab := self.current_tab()) is not None:

@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import matplotlib
 import numpy as np
+from matplotlib import cbook
 from matplotlib.backend_bases import _Mode
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.colors import ListedColormap, to_hex
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.widgets import SpanSelector
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QColor, QDoubleValidator
+from PySide6.QtCore import QByteArray, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QDoubleValidator, QIcon, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -35,6 +38,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QSplitter,
+    QTabBar,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -42,6 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
+from .data_view import DataPreview
 from .export import export_figure
 from .loaders import Dataset
 
@@ -124,10 +130,10 @@ class ColorButton(QPushButton):
     def set_color(self, color: str) -> None:
         self._color = color
         self.setStyleSheet(
-            f"QPushButton {{ background: {color}; border: 2px solid white; border-radius: 8px;"
+            f"QPushButton {{ background: {color}; border: 2px solid {theme.current.card}; border-radius: 8px;"
             " padding: 0; }"
             f"QPushButton:hover {{ border-color: {theme.current.border}; }}"
-            f"QPushButton:disabled {{ border: 2px dashed white; }}"
+            f"QPushButton:disabled {{ border: 2px dashed {theme.current.border}; }}"
         )
 
     def _pick(self) -> None:
@@ -153,6 +159,9 @@ class PlotTab(QWidget):
         super().__init__(parent)
         self.datasets: list[Dataset] = []
         self.custom_name = ""
+        self.data_preview: DataPreview | None = None
+        self._export_theme: theme.Theme | None = None
+        self._export_font: float | None = None
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -190,6 +199,12 @@ class PlotTab(QWidget):
         self.act_mark_region.setToolTip("Drag horizontally on the plot to shade an x-range.")
         self.toolbar.addAction(self.act_mark_point)
         self.toolbar.addAction(self.act_mark_region)
+        self.toolbar.addSeparator()
+        self.act_data = QAction("Data table", self, checkable=True)
+        self.act_data.setToolTip("Show the raw values in a tab next to the plot")
+        self.act_data.toggled.connect(lambda on: self.show_data_preview() if on else self.close_data_preview())
+        self.toolbar.addAction(self.act_data)
+        self.apply_toolbar_icons()
         self.act_mark_point.toggled.connect(lambda on: self._set_mark_mode("point", on))
         self.act_mark_region.toggled.connect(lambda on: self._set_mark_mode("region", on))
         # Turning on matplotlib's pan/zoom switches marking off, and vice versa.
@@ -229,8 +244,20 @@ class PlotTab(QWidget):
         self.controls.setMinimumWidth(320)
         self.controls.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
+        # Plot and (optional) data table live in tabs; the bar hides when
+        # only the plot is open.
+        self.views = QTabWidget()
+        self.views.setObjectName("views")
+        self.views.setDocumentMode(True)
+        self.views.setTabsClosable(True)
+        self.views.setTabBarAutoHide(True)
+        self.views.addTab(plot_area, "Plot")
+        self.views.tabBar().setTabButton(0, QTabBar.RightSide, None)
+        self.views.tabBar().setTabButton(0, QTabBar.LeftSide, None)
+        self.views.tabCloseRequested.connect(lambda i: i > 0 and self.close_data_preview())
+
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(plot_area)
+        splitter.addWidget(self.views)
         splitter.addWidget(self.controls)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
@@ -364,6 +391,11 @@ class PlotTab(QWidget):
         row.addWidget(self.legend_loc, 1)
         form.addRow(row)
 
+        self.accent_axes = QCheckBox("Accent-coloured axes && ticks")
+        self.accent_axes.setToolTip("Draw the axes, ticks, labels and title in the theme's accent colour.")
+        self.accent_axes.toggled.connect(lambda _: self.redraw())
+        form.addRow(self.accent_axes)
+
         self.grid_check = QCheckBox("Show grid")
         self.grid_check.setChecked(True)
         self.grid_check.toggled.connect(lambda _: self.redraw())
@@ -455,6 +487,8 @@ class PlotTab(QWidget):
         self._refresh_x_combo(x_default)
         self._refresh_series_table()
         self.redraw(keep_view=False)
+        if getattr(self, "data_preview", None) is not None:
+            self.data_preview.refresh()
 
     @property
     def display_name(self) -> str:
@@ -652,8 +686,19 @@ class PlotTab(QWidget):
         return ds.frame[col].to_numpy(dtype=float), col
 
     # -------------------------------------------------------------- drawing
+    def _draw_theme(self) -> theme.Theme:
+        return self._export_theme or theme.current
+
+    def _font(self) -> float:
+        return self._export_font or self.font_size.value()
+
     def redraw(self, keep_view: bool = True) -> None:
+        with matplotlib.rc_context(theme.mpl_rc(self._draw_theme())):
+            self._redraw(keep_view)
+
+    def _redraw(self, keep_view: bool) -> None:
         ax = self.ax
+        t = self._draw_theme()
         scales = ("log" if self.logx_check.isChecked() else "linear",
                   "log" if self.logy_check.isChecked() else "linear")
         keep_view = keep_view and bool(self._data_lines) and scales == self._last_scales
@@ -664,13 +709,13 @@ class PlotTab(QWidget):
                 mark.offset = tuple(mark.artists[1].xyann)
 
         ax.clear()
-        self.figure.set_facecolor(theme.current.card)
-        ax.set_facecolor(theme.current.card)
+        self.figure.set_facecolor(t.card)
+        ax.set_facecolor(t.card)
         ax.set_xscale(scales[0])
         ax.set_yscale(scales[1])
         self._last_scales = scales
 
-        fs = self.font_size.value()
+        fs = self._font()
 
         self._data_lines = []
         lines = []
@@ -704,8 +749,14 @@ class PlotTab(QWidget):
         ax.set_xlabel(self.xlabel_edit.text() or auto_x, fontsize=fs)
         ax.set_ylabel(self.ylabel_edit.text() or auto_y, fontsize=fs)
         ax.tick_params(labelsize=fs - 1)
+        if self.accent_axes.isChecked():
+            for spine in ax.spines.values():
+                spine.set_color(t.accent)
+            ax.tick_params(which="both", colors=t.accent)
+            for text in (ax.title, ax.xaxis.label, ax.yaxis.label):
+                text.set_color(t.accent)
         if self.grid_check.isChecked():
-            ax.grid(True, alpha=0.3)
+            ax.grid(True, color=t.border, alpha=0.6 if t.dark else 0.3)
         self._legend_map = {}
         if self.legend_check.isChecked() and lines:
             # Hidden lines stay in the legend, faded, so a click brings them back.
@@ -740,7 +791,7 @@ class PlotTab(QWidget):
             self.toolbar.push_current()
 
     def _draw_marks(self) -> None:
-        fs = self.font_size.value()
+        fs = self._font()
         for mark in self.region_marks:
             mark.artists = [self.ax.axvspan(mark.xmin, mark.xmax, color=mark.color,
                                             alpha=0.2, zorder=0, linewidth=0)]
@@ -751,7 +802,7 @@ class PlotTab(QWidget):
             ann = self.ax.annotate(
                 mark.text, (mark.x, mark.y), xytext=mark.offset, textcoords="offset points",
                 fontsize=fs - 1, color=mark.color, zorder=6,
-                bbox=dict(boxstyle="round,pad=0.35,rounding_size=0.6", fc=theme.current.card, ec=mark.color, alpha=0.92),
+                bbox=dict(boxstyle="round,pad=0.35,rounding_size=0.6", fc=self._draw_theme().card, ec=mark.color, alpha=0.92),
                 arrowprops=dict(arrowstyle="-", color=mark.color, lw=1),
             )
             ann.draggable(True)
@@ -971,11 +1022,69 @@ class PlotTab(QWidget):
             self.cmap_combo.blockSignals(True)
             self.cmap_combo.setCurrentText(new.name)
             self.cmap_combo.blockSignals(False)
+        self.apply_toolbar_icons()
         self._after_marks_changed()  # refresh the marks list and redraw
+
+    @contextmanager
+    def export_style(self, draw_theme: theme.Theme, font_size: float | None):
+        """Temporarily redraw with another theme and font size (for export)."""
+        self._export_theme, self._export_font = draw_theme, font_size
+        try:
+            self.redraw()
+            yield
+        finally:
+            self._export_theme = self._export_font = None
+            self.redraw()
+
+    def apply_toolbar_icons(self) -> None:
+        """Recolour matplotlib's toolbar icons with the theme's text colour."""
+        color = theme.current.text.encode()
+        for _text, _tip, image, callback in self.toolbar.toolitems:
+            action = self.toolbar._actions.get(callback)
+            path = cbook._get_data_path("images", f"{image}.svg") if image else None
+            if action is None or path is None or not path.exists():
+                continue
+            svg = path.read_bytes()
+            for old in (b"black", b"#000000"):
+                svg = svg.replace(b"fill:" + old, b"fill:" + color).replace(b"stroke:" + old, b"stroke:" + color)
+            renderer = QSvgRenderer(QByteArray(svg))
+            pixmap = QPixmap(64, 64)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            action.setIcon(QIcon(pixmap))
+
+    # ----------------------------------------------------------- data table
+    def show_data_preview(self, focus: bool = True) -> None:
+        if self.data_preview is None:
+            self.data_preview = DataPreview(self.datasets)
+            self.data_preview.closeRequested.connect(self.close_data_preview)
+            self.views.addTab(self.data_preview, "Data")
+        if focus:
+            self.views.setCurrentWidget(self.data_preview)
+        self.act_data.blockSignals(True)
+        self.act_data.setChecked(True)
+        self.act_data.blockSignals(False)
+
+    def close_data_preview(self) -> None:
+        if self.data_preview is not None:
+            self.views.removeTab(self.views.indexOf(self.data_preview))
+            self.data_preview.deleteLater()
+            self.data_preview = None
+        self.act_data.blockSignals(True)
+        self.act_data.setChecked(False)
+        self.act_data.blockSignals(False)
+
+    def toggle_data_preview(self) -> None:
+        if self.data_preview is None:
+            self.show_data_preview()
+        else:
+            self.close_data_preview()
 
     def save_figure(self) -> str | None:
         name = self.custom_name or "_".join(d.path.stem for d in self.datasets)
-        path = export_figure(self.figure, name, self)
+        path = export_figure(self.figure, name, self, restyle=self.export_style)
         if path:
             self.statusMessage.emit(f"Saved {path}")
         return path

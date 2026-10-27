@@ -54,9 +54,18 @@ You can also drag files onto the window.
 - **High-quality export** (File → Export figure, Ctrl+S, or the toolbar's save icon):
   PNG, TIFF or JPEG at 150–1200 dpi, or vector SVG, PDF or EPS. Set the output size
   in cm or inches and choose a white, theme-coloured or transparent background.
-  The app remembers your last settings.
-- **Themes**: View → Theme switches between *Berry* (periwinkle, magenta, plum, ivory)
-  and *Forest* (orange, cream, green, deep green). The app remembers your choice. Each
+  The app remembers your last settings. Optional **presets** (journal single, 1.5 or
+  double column, 16:9 or 4:3 slide, poster panel) set the size, resolution and font
+  size in one click. Exports from the dark theme on a white or transparent
+  background automatically use dark text.
+- **Accent-coloured axes**: an option under *Title & legend* draws the axes, ticks,
+  labels and title in the theme's accent colour.
+- **Data table** (optional): the *Data table* toolbar button or View → Show/hide data
+  table (Ctrl+T) opens the raw values in a tab next to the plot. It only opens when
+  you ask, unless you turn on View → *Open data table with new files*.
+- **Themes**: View → Theme switches between *Berry* (periwinkle, magenta, plum, ivory),
+  *Forest* (orange, cream, green, deep green) and *Night* (a dark theme for long
+  sessions and presentations). The plot toolbar icons follow the theme colour. The app remembers your choice. Each
   theme also adds a colormap with the same name. To add a palette, add a `Theme` to
   `csvplot/theme.py`.
 

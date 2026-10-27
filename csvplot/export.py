@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Callable, ContextManager
 
+import matplotlib
 from matplotlib.figure import Figure
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
@@ -34,6 +37,19 @@ FORMATS = {
 BACKGROUNDS = ["White", "Theme colour", "Transparent"]
 CM_PER_INCH = 2.54
 
+CUSTOM = "Custom (as on screen)"
+# name -> (width cm, height cm, dpi, font size pt)
+PRESETS = {
+    "Journal, single column (8.5 cm)": (8.5, 6.5, 600, 8),
+    "Journal, 1.5 column (12 cm)": (12.0, 8.0, 600, 9),
+    "Journal, double column (17.8 cm)": (17.8, 9.5, 600, 9),
+    "Slide 16:9": (25.4, 14.29, 200, 18),
+    "Slide 4:3": (25.4, 19.05, 200, 18),
+    "Poster panel (30 × 20 cm)": (30.0, 20.0, 300, 24),
+}
+
+Restyle = Callable[[theme.Theme, "float | None"], ContextManager]
+
 
 class ExportDialog(QDialog):
     def __init__(self, figure: Figure, default_name: str, parent=None):
@@ -42,6 +58,16 @@ class ExportDialog(QDialog):
         self.figure = figure
         self.default_name = default_name
         self.settings = QSettings("csvplot", "csvplot")
+        self._applying_preset = False
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems([CUSTOM, *PRESETS])
+        self.preset_combo.setToolTip("Optional: set size, resolution and font size in one click.")
+        self.preset_combo.currentTextChanged.connect(self._on_figure_preset)
+
+        self.font_size = QDoubleSpinBox(minimum=0, maximum=60, decimals=1, singleStep=1, suffix=" pt")
+        self.font_size.setSpecialValueText("As on screen")
+        self.font_size.setToolTip("Font size for the exported figure only.")
 
         self.format_combo = QComboBox()
         self.format_combo.addItems(FORMATS)
@@ -74,9 +100,11 @@ class ExportDialog(QDialog):
         size_row.addWidget(self.units)
 
         form = QFormLayout()
+        form.addRow("Preset", self.preset_combo)
         form.addRow("Format", self.format_combo)
         form.addRow("Resolution", dpi_row)
         form.addRow("Size", size_row)
+        form.addRow("Font size", self.font_size)
         form.addRow("Background", self.background)
         form.addRow(self.info)
 
@@ -91,6 +119,30 @@ class ExportDialog(QDialog):
 
         self.format_combo.currentTextChanged.connect(self._update_info)
         self._load_settings()
+        # Editing any preset-controlled value by hand switches back to Custom.
+        for spin in (self.width, self.height, self.dpi, self.font_size):
+            spin.valueChanged.connect(self._preset_edited)
+
+    def _on_figure_preset(self, name: str) -> None:
+        if name not in PRESETS:
+            return
+        w_cm, h_cm, dpi, font = PRESETS[name]
+        self._applying_preset = True
+        self.units.blockSignals(True)
+        self.units.setCurrentText("cm")
+        self.units.blockSignals(False)
+        self.width.setValue(w_cm)
+        self.height.setValue(h_cm)
+        self.dpi.setValue(dpi)
+        self.font_size.setValue(font)
+        self._applying_preset = False
+        self._update_info()
+
+    def _preset_edited(self, *_) -> None:
+        if not self._applying_preset and self.preset_combo.currentText() != CUSTOM:
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.setCurrentText(CUSTOM)
+            self.preset_combo.blockSignals(False)
 
     # -------------------------------------------------------------- state
     def _load_settings(self) -> None:
@@ -153,6 +205,10 @@ class ExportDialog(QDialog):
         return self.width.value() / f, self.height.value() / f
 
     @property
+    def export_font_size(self) -> float | None:
+        return self.font_size.value() or None
+
+    @property
     def extension(self) -> str:
         return FORMATS[self.format_combo.currentText()][0]
 
@@ -170,10 +226,14 @@ class ExportDialog(QDialog):
         return path
 
 
-def save_figure(figure: Figure, path: str, size_inches, dpi: int, background: str) -> None:
+def save_figure(figure: Figure, path: str, size_inches, dpi: int, background: str,
+                restyle: Restyle | None = None, font_size: float | None = None) -> None:
     """Write ``figure`` to ``path`` at the given size and resolution.
 
-    The on-screen figure size is restored afterwards.
+    ``restyle(theme, font_size)`` is a context manager that temporarily redraws
+    the plot. It is used for the export font size, and so that a dark theme
+    exports with dark text on a white or transparent background. The on-screen
+    figure is restored afterwards.
     """
     ext = Path(path).suffix.lower().lstrip(".")
     original = figure.get_size_inches().copy()
@@ -182,6 +242,16 @@ def save_figure(figure: Figure, path: str, size_inches, dpi: int, background: st
         kwargs["transparent"] = True
     else:
         kwargs["facecolor"] = "white" if background == "White" else theme.current.card
+    draw_theme = theme.export_theme(background)
+    needs_restyle = font_size is not None or draw_theme is not theme.current
+    context = restyle(draw_theme, font_size) if restyle and needs_restyle else nullcontext()
+    # Some styling (e.g. gridlines) is resolved at save time, so keep the
+    # export theme's rcParams active while writing.
+    with context, matplotlib.rc_context(theme.mpl_rc(draw_theme)):
+        _save(figure, path, size_inches, background, original, kwargs)
+
+
+def _save(figure, path, size_inches, background, original, kwargs) -> None:
     axes_colors = [ax.get_facecolor() for ax in figure.axes]
     try:
         figure.set_size_inches(*size_inches, forward=False)
@@ -196,7 +266,8 @@ def save_figure(figure: Figure, path: str, size_inches, dpi: int, background: st
         figure.canvas.draw_idle()
 
 
-def export_figure(figure: Figure, default_name: str, parent=None) -> str | None:
+def export_figure(figure: Figure, default_name: str, parent=None,
+                  restyle: Restyle | None = None) -> str | None:
     """Show the export dialog and save; returns the written path, if any."""
     dialog = ExportDialog(figure, default_name, parent)
     if dialog.exec() != QDialog.Accepted:
@@ -207,7 +278,7 @@ def export_figure(figure: Figure, default_name: str, parent=None) -> str | None:
         return None
     try:
         save_figure(figure, path, dialog.size_inches(), dialog.dpi.value(),
-                    dialog.background.currentText())
+                    dialog.background.currentText(), restyle, dialog.export_font_size)
     except Exception as exc:  # noqa: BLE001 - surface any writer error
         QMessageBox.warning(parent, "Export failed", f"Could not save {path}\n\n{exc}")
         return None

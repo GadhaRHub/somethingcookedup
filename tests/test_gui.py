@@ -148,3 +148,46 @@ def test_session_and_tab_names(window, monkeypatch):
     assert window.tabs.tabText(0) == "10 nm sample"
     assert window.current_tab().display_name == "10 nm sample"
     assert not window.windowIcon().isNull()
+
+
+def test_data_preview_optional(window):
+    tab = window.current_tab()
+    assert tab.data_preview is None and tab.views.count() == 1
+    window.toggle_data()
+    assert tab.data_preview is not None and tab.views.count() == 2
+    model = tab.data_preview.model
+    assert model.rowCount() == 12021 and model.headerData(0, QtCore.Qt.Horizontal) == "t_ps"
+    tab.close_data_preview()
+    assert tab.data_preview is None and tab.views.count() == 1 and not tab.act_data.isChecked()
+
+
+def test_accent_axes_and_night_theme(window):
+    from matplotlib.colors import to_hex
+
+    from csvplot import theme
+
+    tab = window.current_tab()
+    tab.accent_axes.setChecked(True)
+    assert to_hex(tab.ax.spines["left"].get_edgecolor()) == theme.current.accent.lower()
+    window.set_theme("Night")
+    try:
+        assert to_hex(tab.figure.get_facecolor()) == theme.THEMES["Night"].card.lower()
+        # White export of a dark theme draws with the light variant, then restores.
+        with tab.export_style(theme.export_theme("White"), 8):
+            assert to_hex(tab.ax.xaxis.label.get_color()) == theme.THEMES["Berry"].accent.lower()
+            assert tab.ax.xaxis.label.get_fontsize() == 8
+        assert to_hex(tab.figure.get_facecolor()) == theme.THEMES["Night"].card.lower()
+    finally:
+        window.set_theme("Berry")
+
+
+def test_export_with_preset_font(window, tmp_path):
+    from csvplot.export import PRESETS, save_figure
+
+    tab = window.current_tab()
+    w_cm, h_cm, dpi, font = PRESETS["Journal, single column (8.5 cm)"]
+    path = tmp_path / "fig.png"
+    save_figure(tab.figure, str(path), (w_cm / 2.54, h_cm / 2.54), dpi, "White",
+                tab.export_style, font)
+    assert path.exists()
+    assert tab.ax.xaxis.label.get_fontsize() == tab.font_size.value()
