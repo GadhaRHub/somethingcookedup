@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from contextlib import contextmanager
 from pathlib import Path
 
 import matplotlib
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
+from .export import export_figure
 from .analysis import (
     DETRENDS,
     METHODS,
@@ -64,6 +66,9 @@ class FFTDialog(QDialog):
         super().__init__(parent or tab, Qt.Window)
         self.tab = tab
         self.results: list[SpectrumResult] = []
+        self._export_theme: theme.Theme | None = None
+        self._export_font: float | None = None
+        self._export_grid: bool | None = None
         self.setWindowTitle(f"Spectral analysis — {tab.display_name}")
         self.resize(1300, 840)
 
@@ -86,8 +91,13 @@ class FFTDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.figure = Figure(figsize=(8, 6), layout="constrained")
-        self.canvas = PlotCanvas(self.figure, lambda: theme.mpl_rc(theme.current))
+        self.canvas = PlotCanvas(self.figure, self._rc)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        save_action = self.toolbar._actions.get("save_figure")
+        if save_action is not None:
+            save_action.triggered.disconnect()
+            save_action.triggered.connect(self.export)
+            save_action.setToolTip("Export these plots (PNG, SVG, PDF, …)")
         self.info = QLabel()
         self.info.setObjectName("hint")
         self.info.setWordWrap(True)
@@ -231,12 +241,13 @@ class FFTDialog(QDialog):
         self.show_data.toggled.connect(lambda _: self.draw())
         form.addRow(self.show_data)
 
-        buttons = [("Copy table", self.copy_table), ("Save table (CSV)…", self.save_table),
+        buttons = [("Export figure (PNG, SVG, PDF…)", self.export),
+                   ("Copy table", self.copy_table), ("Save table (CSV)…", self.save_table),
                    ("Save spectrum (CSV)…", self.save_spectrum),
                    ("Open spectrum as a new plot", self.open_spectrum)]
         for i, (text, slot) in enumerate(buttons):
             btn = QPushButton(text)
-            if i < 3:
+            if 0 < i < 4:
                 btn.setProperty("secondary", True)
             btn.clicked.connect(slot)
             form.addRow(btn)
@@ -362,15 +373,18 @@ class FFTDialog(QDialog):
         rows = int(self.show_data.isChecked()) + 1 + int(spectro)
         axes = fig.subplots(rows, 1, squeeze=False)[:, 0]
         i = 0
-        with matplotlib.rc_context(theme.mpl_rc(theme.current)):
+        t = self._export_theme or theme.current
+        grid = self._export_grid if self._export_grid is not None else True
+        fig.set_facecolor(t.card)
+        with matplotlib.rc_context(self._rc()):
             if self.show_data.isChecked():
                 ax = axes[i]
                 i += 1
                 for r in self.results:
                     ax.plot(r.x, r.y, color=r.color, lw=1.2, label=r.label)
-                ax.set_title("Analysed data", fontsize=10, loc="left")
+                ax.set_title("Analysed data", fontsize="medium", loc="left")
                 ax.set_xlabel(self.tab.ax.get_xlabel())
-                ax.grid(True, alpha=0.3)
+                ax.grid(grid, alpha=0.3)
             ax = axes[i]
             i += 1
             for n, r in enumerate(self.results):
@@ -385,7 +399,7 @@ class FFTDialog(QDialog):
                     if k < (3 if len(self.results) == 1 else 2):
                         ax.annotate(f"T = {p.period:.4g} {xunit}", (px, p.amplitude),
                                     xytext=(5, 4 + 11 * n + 11 * k * (len(self.results) == 1)),
-                                    textcoords="offset points", fontsize=8, color=r.color)
+                                    textcoords="offset points", fontsize="small", color=r.color)
             if period_axis:
                 ax.set_xscale("log")
                 ax.set_xlabel(f"Period ({xunit})" if xunit else "Period")
@@ -395,10 +409,10 @@ class FFTDialog(QDialog):
             if self.log_amp.isChecked():
                 ax.set_yscale("log")
             ax.set_ylabel("Amplitude")
-            ax.set_title("Amplitude spectrum", fontsize=10, loc="left")
-            ax.grid(True, alpha=0.3)
+            ax.set_title("Amplitude spectrum", fontsize="medium", loc="left")
+            ax.grid(grid, alpha=0.3)
             if len(self.results) > 1:
-                ax.legend(fontsize=8)
+                ax.legend(fontsize="small")
             if spectro:
                 ax = axes[i]
                 r = next(r for r in self.results if r.spectrogram is not None)
@@ -406,12 +420,12 @@ class FFTDialog(QDialog):
                 if self.log_amp.isChecked():
                     img = np.log10(np.maximum(img, img.max() * 1e-6))
                 mesh = ax.pcolormesh(r.seg_centers, r.frequency, img, shading="auto",
-                                     cmap=theme.current.name)
+                                     cmap=t.name)
                 fig.colorbar(mesh, ax=ax, label="log₁₀ amplitude" if self.log_amp.isChecked()
                              else "Amplitude")
                 ax.set_xlabel(f"Window centre ({xunit})" if xunit else "Window centre")
                 ax.set_ylabel(f"Frequency ({funit})")
-                ax.set_title(f"Spectrogram: {r.label}", fontsize=10, loc="left")
+                ax.set_title(f"Spectrogram: {r.label}", fontsize="medium", loc="left")
                 ax.set_ylim(*self._frequency_view())
         self.canvas.draw_idle()
         self._update_info(funit, xunit)
@@ -426,6 +440,29 @@ class FFTDialog(QDialog):
         lo = settings.f_min if settings.f_min is not None else 0.0
         hi = settings.f_max if settings.f_max is not None else hi
         return lo, max(hi, lo * 1.01 + 1e-12)
+
+    # --------------------------------------------------------------- export
+    def _rc(self) -> dict:
+        rc = theme.mpl_rc(self._export_theme or theme.current)
+        rc["font.size"] = self._export_font or 10
+        return rc
+
+    @contextmanager
+    def export_style(self, draw_theme: theme.Theme, font_size: float | None,
+                     grid: bool | None = None):
+        """Temporarily redraw for export (see export.save_figure)."""
+        self._export_theme, self._export_font, self._export_grid = draw_theme, font_size, grid
+        try:
+            self.draw()
+            yield
+        finally:
+            self._export_theme = self._export_font = self._export_grid = None
+            self.draw()
+
+    def export(self) -> None:
+        name = f"{self.tab.display_name}_spectrum"
+        if (path := export_figure(self.figure, name, self, restyle=self.export_style)):
+            self.info.setText(f"Saved {path}")
 
     def _update_info(self, funit: str, xunit: str) -> None:
         if not self.results:

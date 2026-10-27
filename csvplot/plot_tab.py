@@ -228,6 +228,7 @@ class PlotTab(QWidget):
         self._legend_pos: tuple[float, float] | None = None   # set by dragging the legend
         self._legend_drawn_loc = None
         self._math_errors: list[str] = []
+        self._loading = False   # restoring a session: skip intermediate redraws
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -999,6 +1000,8 @@ class PlotTab(QWidget):
         return self._export_font or self.font_size.value()
 
     def redraw(self, keep_view: bool = True) -> None:
+        if self._loading:
+            return
         with matplotlib.rc_context(self.rc_params()):
             self._redraw(keep_view)
 
@@ -1626,6 +1629,134 @@ class PlotTab(QWidget):
             self.show_data_preview()
         else:
             self.close_data_preview()
+
+    # -------------------------------------------------------------- session
+    def _state_widgets(self) -> dict:
+        """Settings saved in a session, by name."""
+        w = {
+            "title": self.title_edit, "x_label": self.xlabel_edit, "y_label": self.ylabel_edit,
+            "font_size": self.font_size, "accent_axes": self.accent_axes,
+            "background": self.plot_background, "full_latex": self.full_latex,
+            "latex_preamble": self.latex_preamble,
+            "use_colormap": self.use_cmap, "colormap": self.cmap_combo,
+            "colormap_reverse": self.cmap_reverse,
+            "legend": self.legend_check, "legend_position": self.legend_loc,
+            "legend_line_length": self.legend_line_length, "legend_columns": self.legend_cols,
+            "legend_box": self.legend_box,
+            "log_x": self.logx_check, "log_y": self.logy_check,
+            "tick_direction": self.tick_direction, "mirror_ticks": self.mirror_ticks,
+            "minor_grid": self.minor_grid, "snap_to_data": self.snap_check,
+            "mark_color": self.mark_color,
+        }
+        for axis in ("x", "y"):
+            w[f"major_step_{axis}"] = self.major_step[axis]
+            w[f"minor_ticks_{axis}"] = self.minor_ticks[axis]
+        for which in ("major", "minor"):
+            w[f"tick_width_{which}"] = self.tick_width[which]
+            w[f"tick_length_{which}"] = self.tick_length[which]
+        return w
+
+    def get_state(self) -> dict:
+        settings = {}
+        for name, widget in self._state_widgets().items():
+            if isinstance(widget, ColorButton):
+                settings[name] = widget.color
+            elif isinstance(widget, QLineEdit):
+                settings[name] = widget.text()
+            elif isinstance(widget, QComboBox):
+                settings[name] = widget.currentText()
+            elif isinstance(widget, QCheckBox):
+                settings[name] = widget.isChecked()
+            else:
+                settings[name] = widget.value()
+        if self._legend is not None:   # pick up a drag that hasn't been redrawn yet
+            loc = getattr(self._legend, "_loc", None)
+            if isinstance(loc, tuple) and loc != self._legend_drawn_loc:
+                self._legend_pos = tuple(map(float, loc))
+        for mark in self.text_marks:
+            if mark.artists:
+                mark.x, mark.y = map(float, mark.artists[0].xyann)
+        for mark in self.point_marks:
+            if len(mark.artists) == 2:
+                mark.offset = tuple(mark.artists[1].xyann)
+        series_fields = ("color", "visible", "label", "width", "linestyle", "marker",
+                         "markersize", "alpha", "x_offset", "y_offset")
+        return {
+            "name": self.custom_name,
+            "x_column": self.x_column,
+            "settings": settings,
+            "series": [{"dataset": self.datasets.index(s.dataset), "column": s.column,
+                        **{f: getattr(s, f) for f in series_fields}} for s in self.series],
+            "view": {"x": list(map(float, self.ax.get_xlim())), "y": list(map(float, self.ax.get_ylim()))},
+            "legend_drag": list(self._legend_pos) if self._legend_pos else None,
+            "marks": {
+                "points": [{"x": m.x, "y": m.y, "color": m.color, "offset": list(m.offset)}
+                           for m in self.point_marks],
+                "regions": [{"xmin": m.xmin, "xmax": m.xmax, "color": m.color} for m in self.region_marks],
+                "texts": [{"x": m.x, "y": m.y, "text": m.content, "color": m.color} for m in self.text_marks],
+            },
+            "data_table": None if self.data_preview is None else (
+                "below" if self.views.orientation() == Qt.Vertical else "beside"),
+        }
+
+    def apply_state(self, state: dict) -> None:
+        """Restore everything get_state() saved (datasets must already be added)."""
+        self._loading = True
+        try:
+            self.custom_name = state.get("name", "")
+            if state.get("x_column"):
+                self.x_combo.setCurrentText(state["x_column"])
+            widgets = self._state_widgets()
+            for name, value in state.get("settings", {}).items():
+                widget = widgets.get(name)
+                if widget is None:
+                    continue
+                if isinstance(widget, ColorButton):
+                    widget.set_color(value)
+                elif isinstance(widget, QLineEdit):
+                    widget.setText(value)
+                elif isinstance(widget, QComboBox):
+                    widget.setCurrentText(value)
+                elif isinstance(widget, QCheckBox):
+                    if widget is not self.full_latex or widget.isEnabled():
+                        widget.setChecked(bool(value))
+                else:
+                    widget.setValue(value)
+            by_key = {(self.datasets.index(s.dataset), s.column): s for s in self.series}
+            for saved in state.get("series", []):
+                s = by_key.get((saved["dataset"], saved["column"]))
+                if s is None:
+                    continue  # the file no longer has this column
+                for field_name, value in saved.items():
+                    if field_name not in ("dataset", "column"):
+                        setattr(s, field_name, value)
+            marks = state.get("marks", {})
+            self.point_marks = [PointMark(m["x"], m["y"], m["color"], tuple(m["offset"]))
+                                for m in marks.get("points", [])]
+            self.region_marks = [RegionMark(m["xmin"], m["xmax"], m["color"])
+                                 for m in marks.get("regions", [])]
+            self.text_marks = [TextMark(m["x"], m["y"], m["text"], m["color"])
+                               for m in marks.get("texts", [])]
+            self._legend_pos = tuple(state["legend_drag"]) if state.get("legend_drag") else None
+            self.legend_reset.setEnabled(self._legend_pos is not None)
+            self.latex_preamble.setEnabled(self.full_latex.isChecked())
+            self.cmap_combo.setEnabled(self.use_cmap.isChecked())
+            self.cmap_reverse.setEnabled(self.use_cmap.isChecked())
+        finally:
+            self._loading = False
+        self._refresh_series_table()
+        self._after_marks_changed()   # rebuilds the marks list and redraws
+        self.redraw(keep_view=False)
+        view = state.get("view")
+        if view:
+            self.ax.set_xlim(*view["x"])
+            self.ax.set_ylim(*view["y"])
+            self.toolbar.push_current()
+            self.canvas.draw_idle()
+        if state.get("data_table"):
+            self.show_data_preview(focus=False)
+            if state["data_table"] == "beside":
+                self.toggle_data_layout()
 
     def save_figure(self) -> str | None:
         name = self.custom_name or "_".join(d.path.stem for d in self.datasets)

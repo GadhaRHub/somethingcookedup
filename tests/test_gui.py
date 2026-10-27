@@ -486,3 +486,96 @@ def test_fft_dialog(window):
     assert window.tabs.count() == 2
     assert window.current_tab().datasets[0].frame.columns[0] == "Frequency (THz)"
     dialog.close()
+
+
+def test_fft_figure_export(window, tmp_path):
+    from csvplot.export import save_figure
+
+    tab = window.current_tab()
+    tab.open_fft()
+    dialog = tab.fft_dialog
+    dialog.run()
+    for ext in ("png", "pdf", "svg"):
+        path = tmp_path / f"spectrum.{ext}"
+        save_figure(dialog.figure, str(path), (6, 5), 200, "White", dialog.export_style, 9)
+        assert path.stat().st_size > 1000
+    assert dialog._export_font is None and len(dialog.figure.axes) >= 2
+    dialog.close()
+
+
+def test_session_round_trip(window, tmp_path, monkeypatch):
+    from csvplot.plot_tab import RegionMark, TextMark
+
+    tab = window.current_tab()
+    window.set_session_name("Ti film")
+    tab.custom_name = "10 nm sample"
+    first, second = tab._plottable()
+    first.width, first.linestyle, first.color = 3.0, "--", "#123456"
+    second.y_offset, second.label, second.visible = 0.01, r"$\Delta R$", False
+    tab.title_edit.setText(r"Ti: $\tau$")
+    tab.xname_edit.setText("Delay (ps)")
+    tab.legend_box.setChecked(False)
+    tab.legend_cols.setValue(2)
+    tab.mirror_ticks.setChecked(True)
+    tab.minor_ticks["x"].setCurrentText("5")
+    tab.tick_width["major"].setValue(1.4)
+    tab.region_marks.append(RegionMark(10, 20, "#CC088A"))
+    tab.text_marks.append(TextMark(100, 0.01, "$E=mc^2$", "#4F0336"))
+    tab._after_marks_changed()
+    tab.ax.set_xlim(2, 50)
+    tab._legend._loc = (0.3, 0.4)
+    tab.show_data_preview()
+    tab.toggle_data_layout()                       # beside
+
+    # A second plot made inside the app (no file on disk).
+    tab.open_fft()
+    tab.fft_dialog.open_spectrum()
+    tab.fft_dialog.close()
+    assert window.tabs.count() == 2
+
+    path = tmp_path / "s.csvplot"
+    from csvplot.session import save_session
+    save_session(window, path)
+
+    window.close_all()
+    assert window.tabs.count() == 0
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *a, **k: None)
+    window.open_session(path)
+
+    assert window.tabs.count() == 2 and window.windowTitle().startswith("Ti film")
+    tab = window.tabs.widget(0)
+    assert window.tabs.tabText(0) == "10 nm sample"
+    first, second = tab._plottable()
+    assert (first.width, first.linestyle, first.color) == (3.0, "--", "#123456")
+    assert (second.y_offset, second.label, second.visible) == (0.01, r"$\Delta R$", False)
+    assert tab.ax.get_title() == r"Ti: $\tau$" and tab.ax.get_xlabel() == "Delay (ps)"
+    assert not tab.legend_box.isChecked() and tab.legend_cols.value() == 2
+    assert tab.mirror_ticks.isChecked() and tab.minor_ticks["x"].currentText() == "5"
+    assert tab.tick_width["major"].value() == 1.4
+    assert [(m.xmin, m.xmax) for m in tab.region_marks] == [(10, 20)]
+    assert [m.content for m in tab.text_marks] == ["$E=mc^2$"]
+    assert tab.ax.get_xlim() == (2, 50)
+    assert tab._legend._loc == (0.3, 0.4)
+    assert tab.data_preview is not None and tab.views.orientation() == QtCore.Qt.Horizontal
+    spectrum_tab = window.tabs.widget(1)
+    assert spectrum_tab.datasets[0].frame.columns[0] == "Frequency (THz)"
+
+
+def test_session_uses_saved_copy_when_file_is_missing(window, tmp_path, monkeypatch):
+    import shutil
+
+    from csvplot.session import save_session
+
+    moved = tmp_path / "data.csv"
+    shutil.copy(SAMPLE, moved)
+    window.close_all()
+    window.open_files([moved])
+    path = tmp_path / "s.csvplot"
+    save_session(window, path)
+    moved.unlink()
+    window.close_all()
+    notes = []
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *a: notes.append(a[2]))
+    window.open_session(path)
+    assert window.tabs.count() == 1 and len(window.current_tab().datasets[0].frame) == 12021
+    assert "not found" in notes[0]

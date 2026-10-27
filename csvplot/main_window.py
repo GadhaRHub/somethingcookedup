@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from . import __version__, theme
 from .loaders import file_dialog_filter, load_file
 from .plot_tab import PlotTab
+from .session import SESSION_FILTER, SESSION_SUFFIX, load_session, save_session
 
 APP_NAME = "CSV Plotter"
 RESOURCES = Path(__file__).resolve().parent / "resources"
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.settings = QSettings("csvplot", "csvplot")
         self.detached: list[DetachedWindow] = []
+        self.session_path: Path | None = None
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
@@ -131,6 +133,12 @@ class MainWindow(QMainWindow):
         self.act_close = action("&Close tab", lambda: self.close_tab(self.tabs.currentIndex()),
                                 QKeySequence.Close)
         self.act_quit = action("&Quit", self.close, QKeySequence.Quit)
+        self.act_open_session = action("Open s&ession…", self.open_session_dialog, "Ctrl+Shift+E",
+                                       "Open a saved session with all its plots and settings")
+        self.act_save_session = action("Save sessio&n", self.save_session, "Ctrl+Alt+S",
+                                       "Save all plots, settings and marks to a session file")
+        self.act_save_session_as = action("Save session &as…", lambda: self.save_session(ask=True),
+                                          "Ctrl+Shift+S")
         self.act_session = action("Name &session…", self.edit_session_name, "F2",
                                   "Name this session; the name appears in the window title")
         self.act_rename_tab = action("&Rename plot…", lambda: self.rename_tab(self.tabs.currentIndex()),
@@ -150,7 +158,8 @@ class MainWindow(QMainWindow):
         self.act_about = action("&About", self.show_about)
 
         file_menu = self.menuBar().addMenu("&File")
-        for act in (self.act_open, self.act_add, None, self.act_session, self.act_rename_tab, None,
+        for act in (self.act_open, self.act_add, None, self.act_open_session, self.act_save_session,
+                    self.act_save_session_as, None, self.act_session, self.act_rename_tab, None,
                     self.act_save, None, self.act_close, None, self.act_quit):
             file_menu.addSeparator() if act is None else file_menu.addAction(act)
         view_menu = self.menuBar().addMenu("&View")
@@ -209,9 +218,79 @@ class MainWindow(QMainWindow):
     def _update_actions(self, *_):
         has_tab = self.tabs.count() > 0
         for act in (self.act_add, self.act_save, self.act_close, self.act_detach, self.act_controls,
-                    self.act_rename_tab, self.act_data, self.act_fft):
+                    self.act_rename_tab, self.act_data, self.act_fft, self.act_save_session,
+                    self.act_save_session_as):
             act.setEnabled(has_tab)
         self.stack.setCurrentIndex(1 if has_tab else 0)
+
+    # ------------------------------------------------------------- sessions
+    def current_theme_name(self) -> str:
+        return theme.current.name
+
+    def _all_plot_count(self) -> int:
+        return self.tabs.count() + len(self.detached)
+
+    def save_session(self, ask: bool = False) -> bool:
+        if self._all_plot_count() == 0:
+            return False
+        path = self.session_path
+        if ask or path is None:
+            folder = self.settings.value("last_dir", str(Path.home()))
+            name = (self.session_name or "session").replace("/", "-") + SESSION_SUFFIX
+            chosen, _ = QFileDialog.getSaveFileName(self, "Save session", str(Path(folder) / name),
+                                                    SESSION_FILTER)
+            if not chosen:
+                return False
+            if not chosen.lower().endswith(SESSION_SUFFIX):
+                chosen += SESSION_SUFFIX
+            path = Path(chosen)
+        try:
+            save_session(self, path)
+        except Exception as exc:  # noqa: BLE001 - show any write error
+            QMessageBox.warning(self, "Could not save session", f"{path}\n\n{exc}")
+            return False
+        self.session_path = Path(path)
+        self.statusBar().showMessage(f"Session saved to {path}", 8000)
+        return True
+
+    def open_session_dialog(self) -> None:
+        folder = self.settings.value("last_dir", str(Path.home()))
+        path, _ = QFileDialog.getOpenFileName(self, "Open session", folder, SESSION_FILTER)
+        if path:
+            self.open_session(path)
+
+    def open_session(self, path) -> None:
+        if self._all_plot_count():
+            choice = QMessageBox.question(
+                self, "Open session",
+                "Close the plots that are open now?\n\n"
+                "Yes: replace them with the session.  No: add the session's plots.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Yes)
+            if choice == QMessageBox.Cancel:
+                return
+            if choice == QMessageBox.Yes:
+                self.close_all()
+        try:
+            notes = load_session(self, path)
+        except Exception as exc:  # noqa: BLE001 - corrupt or foreign file
+            QMessageBox.warning(self, "Could not open session", f"{path}\n\n{exc}")
+            return
+        self.session_path = Path(path)
+        self.settings.setValue("last_dir", str(Path(path).parent))
+        self._update_actions()
+        if notes:
+            QMessageBox.information(self, "Session opened", "\n".join(notes))
+        else:
+            self.statusBar().showMessage(f"Opened session {path}", 8000)
+
+    def close_all(self) -> None:
+        for window in list(self.detached):
+            tab = window.takeCentralWidget()
+            window.close()
+            if tab is not None:
+                tab.deleteLater()
+        while self.tabs.count():
+            self.close_tab(0)
 
     def current_tab(self) -> PlotTab | None:
         return self.tabs.currentWidget()
@@ -219,7 +298,8 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------------------- files
     def _ask_for_files(self, title: str) -> list[str]:
         start = self.settings.value("last_dir", str(Path.home()))
-        paths, _ = QFileDialog.getOpenFileNames(self, title, start, file_dialog_filter())
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, title, start, f"{file_dialog_filter()};;{SESSION_FILTER}")
         if paths:
             self.settings.setValue("last_dir", str(Path(paths[0]).parent))
         return paths
@@ -246,6 +326,9 @@ class MainWindow(QMainWindow):
 
     def open_files(self, paths) -> None:
         for path in paths:
+            if str(path).lower().endswith(SESSION_SUFFIX):
+                self.open_session(path)
+                continue
             dataset = self._load(path)
             if dataset is None:
                 continue

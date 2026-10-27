@@ -19,6 +19,14 @@ You can also drag files onto the window.
 
 ## Features
 
+- **Save and open sessions**: *File → Save session* (Ctrl+Alt+S) / *Save session as…*
+  (Ctrl+Shift+S) writes a `.csvplot` file. It stores every plot (including detached
+  ones and spectra made in the app) with its line styles, offsets, labels, ticks,
+  legend (including a dragged position), marks, text/equations, zoom and data-table
+  layout, plus the session name and theme. *File → Open session…* (Ctrl+Shift+E), or
+  opening/dropping a `.csvplot` file, restores it; you choose whether to replace or
+  add to the plots already open. Data files are re-read from disk; if one has moved,
+  the copy saved in the session is used and you're told.
 - **Named sessions**: type a name in the *Session* box on the toolbar (or press F2).
   The name appears in the window title, e.g. "Ti film pump-probe — CSV Plotter".
   Double-click a tab (or press Ctrl+R) to rename that plot. Exported files use the
@@ -84,6 +92,8 @@ You can also drag files onto the window.
 - **High-quality export** (File → Export figure, Ctrl+S, or the toolbar's save icon):
   PNG, TIFF or JPEG at 150–1200 dpi, or vector SVG, PDF or EPS. Set the output size
   in cm or inches and choose a white, theme-coloured or transparent background.
+  The analysis window has the same export (*Export figure* or its save icon), so the
+  spectrum and spectrogram plots can be saved in any format too.
   The export can use a plain or grid plot area regardless of the on-screen choice,
   and a live **preview** shows the figure exactly as it will be saved. The app
   remembers your last settings. Optional **presets** (journal single, 1.5 or
