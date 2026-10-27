@@ -136,24 +136,25 @@ class RegionMark:
 
 
 class PlotCanvas(FigureCanvasQTAgg):
-    """Canvas that draws (and saves) with its plot's own settings, e.g. theme
-    colours and the optional full-LaTeX mode, and survives LaTeX errors."""
+    """Canvas that draws (and saves) with its own rcParams, e.g. theme colours
+    and the optional full-LaTeX mode. ``on_error`` may handle a failed draw
+    (return True) instead of raising, e.g. for LaTeX errors."""
 
-    def __init__(self, figure, owner: "PlotTab"):
+    def __init__(self, figure, rc_params, on_error=None):
         super().__init__(figure)
-        self._owner = owner
+        self._rc_params = rc_params
+        self._on_error = on_error
 
     def draw(self):
-        with matplotlib.rc_context(self._owner.rc_params()):
+        with matplotlib.rc_context(self._rc_params()):
             try:
                 super().draw()
-            except Exception as exc:  # noqa: BLE001 - LaTeX errors surface here
-                if not self._owner.usetex():
+            except Exception as exc:  # noqa: BLE001 - e.g. LaTeX errors surface here
+                if self._on_error is None or not self._on_error(exc):
                     raise
-                self._owner.latex_failed(exc)
 
     def print_figure(self, *args, **kwargs):
-        with matplotlib.rc_context(self._owner.rc_params()):
+        with matplotlib.rc_context(self._rc_params()):
             return super().print_figure(*args, **kwargs)
 
 
@@ -208,6 +209,8 @@ class PlotTab(QWidget):
     """Interactive plot of one or more datasets."""
 
     statusMessage = Signal(str)
+    viewChanged = Signal()                 # x/y limits changed (zoom, pan, ranges)
+    openDatasetRequested = Signal(object)  # e.g. a spectrum to open as a new plot
 
     def __init__(self, dataset: Dataset, parent=None):
         super().__init__(parent)
@@ -240,7 +243,7 @@ class PlotTab(QWidget):
     def _build_ui(self) -> None:
         theme.apply_matplotlib_style()
         self.figure = Figure(figsize=(8, 5), layout="tight")
-        self.canvas = PlotCanvas(self.figure, self)
+        self.canvas = PlotCanvas(self.figure, self.rc_params, self._on_draw_error)
         self.canvas.setFocusPolicy(Qt.StrongFocus)
         self.ax = self.figure.add_subplot()
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
@@ -275,6 +278,11 @@ class PlotTab(QWidget):
         self.act_data.setToolTip("Show the raw values next to the plot (Ctrl+T)")
         self.act_data.toggled.connect(lambda on: self.show_data_preview() if on else self.close_data_preview())
         self.tools_bar.addAction(self.act_data)
+        self.tools_bar.addSeparator()
+        self.act_fft = QAction("Spectral analysis (FFT)", self)
+        self.act_fft.setToolTip("Windowed FFT / Welch / spectrogram and period extraction")
+        self.act_fft.triggered.connect(self.open_fft)
+        self.tools_bar.addAction(self.act_fft)
         self.apply_toolbar_icons()
         self.act_mark_point.toggled.connect(lambda on: self._set_mark_mode("point", on))
         self.act_mark_region.toggled.connect(lambda on: self._set_mark_mode("region", on))
@@ -943,6 +951,12 @@ class PlotTab(QWidget):
             })
         return rc
 
+    def _on_draw_error(self, exc: Exception) -> bool:
+        if not self.usetex():
+            return False
+        self.latex_failed(exc)
+        return True
+
     def latex_failed(self, exc: Exception) -> None:
         """LaTeX could not compile something: switch back to built-in math."""
         self.full_latex.blockSignals(True)
@@ -1149,6 +1163,7 @@ class PlotTab(QWidget):
     def _sync_range_fields(self) -> None:
         if self._syncing:
             return
+        self.viewChanged.emit()
         (x0, x1), (y0, y1) = self.ax.get_xlim(), self.ax.get_ylim()
         for edit, value in ((self.xmin_edit, x0), (self.xmax_edit, x1),
                             (self.ymin_edit, y0), (self.ymax_edit, y1)):
@@ -1581,6 +1596,17 @@ class PlotTab(QWidget):
         self.act_data.blockSignals(True)
         self.act_data.setChecked(False)
         self.act_data.blockSignals(False)
+
+    def open_fft(self) -> None:
+        from .fft_dialog import FFTDialog  # imported lazily: pulls in scipy
+
+        if getattr(self, "fft_dialog", None) is None:
+            self.fft_dialog = FFTDialog(self)
+        else:
+            self.fft_dialog.refresh_choices()
+        self.fft_dialog.show()
+        self.fft_dialog.raise_()
+        self.fft_dialog.activateWindow()
 
     def toggle_data_layout(self) -> None:
         """Switch the data table between below the plot and beside it."""

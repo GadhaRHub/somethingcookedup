@@ -104,6 +104,30 @@ You can also drag files onto the window.
 
 ![Berry and Forest themes](docs/themes.png)
 
+## Spectral analysis (windowed FFT, periods)
+
+*Spectral analysis (FFT)* in the plot's second toolbar row, or **Analysis → Windowed FFT
+/ periods…** (Ctrl+Shift+F), opens an analysis window for the current plot:
+
+- **Lines**: one line, or *all lines shown on the plot*.
+- **Range**: the *current view* (follows the plot as you zoom and pan), the full data,
+  or any marked region.
+- **Method**:
+  - *Single FFT*: the whole range.
+  - *Welch*: averages sliding windows; you set the window length and overlap.
+  - *Spectrogram*: shows how the spectrum changes along x.
+- **Window**: Hann, Hamming, Blackman, Blackman-Harris, flat top, Bartlett, Tukey (α),
+  Kaiser (β) or rectangular. You can also detrend (mean or linear) and zero-pad.
+- **Periods**: the strongest peaks, refined between bins, are listed with frequency,
+  period, amplitude and relative height. You choose how many, a minimum height and an
+  optional frequency range. Amplitudes are in the data's units (a sine of amplitude A
+  gives a peak of height A).
+- **Units**: taken from the X axis name: ps → THz, fs → PHz, ns → GHz, s → Hz, and so on.
+- **Output**: copy or save the periods table, save the spectrum as CSV, or open it as a
+  new plot to style and export.
+
+Uneven x spacing is resampled onto a uniform grid, and the window says so.
+
 ## Icon
 
 The app icon shows two bipolar (derivative-of-Gaussian) echo pulses. The small echo

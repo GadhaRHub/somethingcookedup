@@ -451,3 +451,38 @@ def test_full_latex_mode(window, tmp_path):
     tab.redraw()
     tab.canvas.draw()
     assert not tab.full_latex.isChecked()
+
+
+def test_fft_dialog(window):
+    tab = window.current_tab()
+    tab.xmin_edit.setText("1")
+    tab.xmax_edit.setText("100")
+    tab.apply_ranges()
+    tab.open_fft()
+    dialog = tab.fft_dialog
+    labels = [dialog.series_combo.itemText(i) for i in range(dialog.series_combo.count())]
+    assert labels[0] == "All lines shown on the plot" and "dR_over_R_minus_bg" in labels
+    dialog.series_combo.setCurrentText("dR_over_R_minus_bg")
+    dialog.run()
+    assert dialog.results[0].x[0] >= 1 and dialog.results[0].x[-1] <= 100   # current view
+    assert dialog.rows()[0][2] == pytest.approx(6.71, abs=0.05)               # period in ps
+    assert dialog.headers()[1:3] == ["Frequency (THz)", "Period (ps)"]
+    assert dialog.table.rowCount() == len(dialog.rows())
+
+    # Zooming the plot re-analyses the current view.
+    tab.ax.set_xlim(1, 50)
+    dialog.run()
+    assert dialog.results[0].x[-1] <= 50
+
+    # All shown lines, spectrogram with overlap.
+    dialog.series_combo.setCurrentText("All lines shown on the plot")
+    dialog.method.setCurrentText("Spectrogram (sliding windows along x)")
+    dialog.segment.setValue(10)
+    dialog.overlap.setValue(75)
+    dialog.run()
+    assert len(dialog.results) == 2 and dialog.results[0].spectrogram is not None
+
+    dialog.open_spectrum()
+    assert window.tabs.count() == 2
+    assert window.current_tab().datasets[0].frame.columns[0] == "Frequency (THz)"
+    dialog.close()

@@ -144,6 +144,8 @@ class MainWindow(QMainWindow):
         self.act_data_auto.setStatusTip("Also open the data table automatically when a file is opened")
         self.act_data_auto.setChecked(self.settings.value("data_table_auto", False, type=bool))
         self.act_data_auto.toggled.connect(lambda on: self.settings.setValue("data_table_auto", on))
+        self.act_fft = action("&Windowed FFT / periods…", self.open_fft, "Ctrl+Shift+F",
+                              "Spectral analysis of the current plot: window, overlap, periods")
         self.act_help = action("&Mouse controls", self.show_help, QKeySequence.HelpContents)
         self.act_about = action("&About", self.show_about)
 
@@ -167,6 +169,8 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _=False, n=name: self.set_theme(n))
             self.theme_group.addAction(act)
             theme_menu.addAction(act)
+        analysis_menu = self.menuBar().addMenu("&Analysis")
+        analysis_menu.addAction(self.act_fft)
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.act_help)
         help_menu.addAction(self.act_about)
@@ -205,7 +209,7 @@ class MainWindow(QMainWindow):
     def _update_actions(self, *_):
         has_tab = self.tabs.count() > 0
         for act in (self.act_add, self.act_save, self.act_close, self.act_detach, self.act_controls,
-                    self.act_rename_tab, self.act_data):
+                    self.act_rename_tab, self.act_data, self.act_fft):
             act.setEnabled(has_tab)
         self.stack.setCurrentIndex(1 if has_tab else 0)
 
@@ -245,16 +249,32 @@ class MainWindow(QMainWindow):
             dataset = self._load(path)
             if dataset is None:
                 continue
-            tab = PlotTab(dataset)
-            tab.statusMessage.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
-            if self.act_data_auto.isChecked():
-                tab.show_data_preview(focus=False)
-            index = self.tabs.addTab(tab, tab.display_name)
-            self.tabs.setTabToolTip(index, str(dataset.path))
-            self.tabs.setCurrentIndex(index)
+            tab = self._new_tab(dataset)
+            self.tabs.setTabToolTip(self.tabs.indexOf(tab), str(dataset.path))
             rows, cols = dataset.frame.shape
             self.statusBar().showMessage(f"Opened {dataset.path}  ({rows} rows, {cols} columns)", 8000)
         self._update_actions()
+
+    def _new_tab(self, dataset) -> PlotTab:
+        tab = PlotTab(dataset)
+        tab.statusMessage.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
+        tab.openDatasetRequested.connect(self.open_dataset)
+        if self.act_data_auto.isChecked():
+            tab.show_data_preview(focus=False)
+        index = self.tabs.addTab(tab, tab.display_name)
+        self.tabs.setCurrentIndex(index)
+        self._update_actions()
+        return tab
+
+    def open_dataset(self, dataset) -> None:
+        """Open data made inside the app (e.g. a spectrum) as a new plot."""
+        self.stack.setCurrentIndex(1)
+        self._new_tab(dataset)
+        self.statusBar().showMessage(f"Opened {dataset.name}", 8000)
+
+    def open_fft(self) -> None:
+        if (tab := self.current_tab()) is not None:
+            tab.open_fft()
 
     def close_tab(self, index: int) -> None:
         if index < 0:
