@@ -428,3 +428,26 @@ def test_renaming_a_line_keeps_the_zoom(window):
     tab.series_name.setText("renamed")
     tab.series_name.editingFinished.emit()
     assert tab.ax.get_xlim() == (-1, 20)
+
+
+def test_full_latex_mode(window, tmp_path):
+    from csvplot.symbols import latex_available
+
+    if not latex_available()[0]:
+        pytest.skip("no LaTeX installation")
+    tab = window.current_tab()
+    tab.ylabel_edit.setText(r"$\Delta R/R$ in \% of $R_0$")
+    tab.full_latex.setChecked(True)
+    tab.canvas.draw()
+    assert tab.ax.yaxis.label.get_usetex()
+    assert tab.ax.get_title() == r"dRR\_Ti\_10nm.csv"      # underscores escaped
+    from csvplot.export import save_figure
+
+    save_figure(tab.figure, str(tmp_path / "tex.pdf"), (4, 3), 300, "White")
+    assert (tmp_path / "tex.pdf").stat().st_size > 1000
+
+    # A LaTeX error falls back to built-in math instead of breaking the app.
+    tab.title_edit.setText(r"$\undefinedcommand$")
+    tab.redraw()
+    tab.canvas.draw()
+    assert not tab.full_latex.isChecked()

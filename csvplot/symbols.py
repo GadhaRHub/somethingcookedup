@@ -123,3 +123,32 @@ class SymbolButton(QToolButton):
     def _insert(self, template: str) -> None:
         if self.target is not None:
             insert_math(self.target, template)
+
+
+# ------------------------------------------------------------- full LaTeX mode
+_LATEX_SPECIALS = {"_": r"\_", "%": r"\%", "&": r"\&", "#": r"\#",
+                   "^": r"\^{}", "~": r"\textasciitilde{}"}
+
+
+def latex_available() -> tuple[bool, str]:
+    """Whether matplotlib's usetex can run here, and what is missing if not."""
+    import shutil
+
+    missing = [tool for tool in ("latex", "dvipng") if shutil.which(tool) is None]
+    if missing:
+        return False, ("Full LaTeX needs a LaTeX installation (e.g. TeX Live or MiKTeX) "
+                       f"with {' and '.join(missing)} on the PATH.")
+    return True, ""
+
+
+def latex_escape(text: str) -> str:
+    """Escape LaTeX special characters outside $...$ so plain names like
+    'dR_over_R' work; math segments are passed through unchanged."""
+    parts, out = text.split("$"), []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:  # outside math
+            part = "".join(_LATEX_SPECIALS.get(ch, ch) for ch in part)
+        out.append(part)
+    if len(parts) % 2 == 0:  # unmatched $: treat the last one literally
+        return "$".join(out[:-1]) + r"\$" + out[-1]
+    return "$".join(out)

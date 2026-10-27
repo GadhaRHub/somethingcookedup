@@ -60,6 +60,13 @@ You can also drag files onto the window.
   roots into the last field you clicked; select text first to wrap it, e.g. turn "-1"
   in "cm-1" into a superscript. Math that can't be read is shown as plain text rather
   than breaking the plot.
+- **Full LaTeX mode** (optional, *Title & labels → Full LaTeX*): renders all text with
+  your LaTeX installation (TeX Live, MiKTeX, MacTeX; needs `latex` and `dvipng`), so
+  you get LaTeX fonts, `\text{…}`, `aligned` environments and packages added via
+  *Preamble* (e.g. `\usepackage{siunitx}`). Special characters in plain names, like
+  `_` in `dR_over_R`, are escaped automatically. If LaTeX can't compile a label, the
+  app switches back to built-in math and shows the LaTeX error. The option is disabled,
+  with an explanation, when LaTeX isn't installed.
 - **Text and equations on the plot**: *Add text / equation* (second toolbar row), then
   click where it should go. Drag to move, double-click to edit, right-click to remove.
 - **Hide lines**: untick a series, or click its legend entry to hide or show it.

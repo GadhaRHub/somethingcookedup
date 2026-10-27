@@ -15,7 +15,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.ticker import AutoMinorLocator, LogLocator, MultipleLocator, NullLocator
 from matplotlib.widgets import SpanSelector
-from PySide6.QtCore import QByteArray, Qt, Signal
+from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QDoubleValidator, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -51,7 +51,7 @@ from . import theme
 from .data_view import DataPreview
 from .export import export_figure
 from .loaders import Dataset
-from .symbols import SymbolButton, safe_text
+from .symbols import SymbolButton, latex_available, latex_escape, safe_text
 
 ROW_INDEX = "(row index)"
 
@@ -133,6 +133,28 @@ class RegionMark:
     @property
     def text(self) -> str:
         return f"{self.xmin:.6g} → {self.xmax:.6g}"
+
+
+class PlotCanvas(FigureCanvasQTAgg):
+    """Canvas that draws (and saves) with its plot's own settings, e.g. theme
+    colours and the optional full-LaTeX mode, and survives LaTeX errors."""
+
+    def __init__(self, figure, owner: "PlotTab"):
+        super().__init__(figure)
+        self._owner = owner
+
+    def draw(self):
+        with matplotlib.rc_context(self._owner.rc_params()):
+            try:
+                super().draw()
+            except Exception as exc:  # noqa: BLE001 - LaTeX errors surface here
+                if not self._owner.usetex():
+                    raise
+                self._owner.latex_failed(exc)
+
+    def print_figure(self, *args, **kwargs):
+        with matplotlib.rc_context(self._owner.rc_params()):
+            return super().print_figure(*args, **kwargs)
 
 
 class ColorButton(QPushButton):
@@ -218,7 +240,7 @@ class PlotTab(QWidget):
     def _build_ui(self) -> None:
         theme.apply_matplotlib_style()
         self.figure = Figure(figsize=(8, 5), layout="tight")
-        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas = PlotCanvas(self.figure, self)
         self.canvas.setFocusPolicy(Qt.StrongFocus)
         self.ax = self.figure.add_subplot()
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
@@ -457,6 +479,26 @@ class PlotTab(QWidget):
         math_hint.setWordWrap(True)
         math_hint.setTextFormat(Qt.PlainText)
         form.addRow(math_hint)
+
+        available, why = latex_available()
+        self.full_latex = QCheckBox("Full LaTeX (uses your LaTeX installation)")
+        self.full_latex.setToolTip(
+            "Render all text with real LaTeX: packages, \\text{…}, \\begin{aligned}…, and LaTeX fonts.\n"
+            "Slower than the built-in math. Exports use it too." if available else why)
+        self.full_latex.setEnabled(available)
+        self.full_latex.toggled.connect(self._on_full_latex)
+        form.addRow(self.full_latex)
+        self.latex_preamble = QLineEdit()
+        self.latex_preamble.setPlaceholderText(r"Extra preamble, e.g. \usepackage{siunitx}")
+        self.latex_preamble.setToolTip("Added after \\usepackage{amsmath}.")
+        self.latex_preamble.setEnabled(False)
+        self.latex_preamble.editingFinished.connect(lambda: self.usetex() and self.redraw())
+        form.addRow("Preamble", self.latex_preamble)
+        if not available:
+            missing = QLabel(why)
+            missing.setObjectName("hint")
+            missing.setWordWrap(True)
+            form.addRow(missing)
 
         self.accent_axes = QCheckBox("Accent-coloured axes && ticks")
         self.accent_axes.setToolTip("Draw the axes, ticks, labels and title in the theme's accent colour.")
@@ -887,7 +929,45 @@ class PlotTab(QWidget):
         return ds.frame[col].to_numpy(dtype=float), col
 
     # -------------------------------------------------------------- drawing
+    # ----------------------------------------------------------- full LaTeX
+    def usetex(self) -> bool:
+        return hasattr(self, "full_latex") and self.full_latex.isChecked()
+
+    def rc_params(self) -> dict:
+        rc = theme.mpl_rc(self._draw_theme())
+        if self.usetex():
+            rc.update({
+                "text.usetex": True,
+                "font.family": "serif",
+                "text.latex.preamble": "\\usepackage{amsmath}\n" + self.latex_preamble.text(),
+            })
+        return rc
+
+    def latex_failed(self, exc: Exception) -> None:
+        """LaTeX could not compile something: switch back to built-in math."""
+        self.full_latex.blockSignals(True)
+        self.full_latex.setChecked(False)
+        self.full_latex.blockSignals(False)
+        self.latex_preamble.setEnabled(False)
+        lines = [ln for ln in str(exc).splitlines() if ln.strip()]
+        detail = "\n".join(lines[-12:])
+        QTimer.singleShot(0, self.redraw)
+        box = QMessageBox(QMessageBox.Warning, "LaTeX error",
+                          "LaTeX could not render a label, so built-in math is used again.",
+                          QMessageBox.Ok, self)
+        box.setDetailedText(detail)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.open()  # non-blocking: we may be inside a paint
+
+    def _on_full_latex(self, on: bool) -> None:
+        self.latex_preamble.setEnabled(on)
+        if on:
+            self.statusMessage.emit("Rendering with LaTeX… (the first draw can take a few seconds)")
+        self.redraw()
+
     def _safe(self, text: str) -> str:
+        if self.usetex():
+            return latex_escape(text)
         shown, ok = safe_text(text)
         if not ok:
             self._math_errors.append(repr(text))
@@ -905,7 +985,7 @@ class PlotTab(QWidget):
         return self._export_font or self.font_size.value()
 
     def redraw(self, keep_view: bool = True) -> None:
-        with matplotlib.rc_context(theme.mpl_rc(self._draw_theme())):
+        with matplotlib.rc_context(self.rc_params()):
             self._redraw(keep_view)
 
     def _redraw(self, keep_view: bool) -> None:
@@ -1193,7 +1273,7 @@ class PlotTab(QWidget):
                 QLineEdit.Normal, current)
             if not ok or not text.strip():
                 return None
-            if safe_text(text)[1]:
+            if self.usetex() or safe_text(text)[1]:
                 return text
             QMessageBox.warning(self, "Invalid math",
                                 "That math could not be read; please check the $…$ part.")
