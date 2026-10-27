@@ -13,6 +13,8 @@ python -m csvplot samples/dRR_Ti_10nm.csv # or pass files on the command line
 
 You can also drag files onto the window.
 
+![CSV Plotter showing the sample file](docs/screenshot.png)
+
 ## Features
 
 - **Multiple files**: each file opens in its own tab. Tabs can be closed, reordered,
