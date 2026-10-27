@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 SIZE = 256
-BG, BIG, SMALL, GLOW = "#4F0336", "#CC088A", "#D9C0FA", "#F2EEE5"
+BG, BIG, SMALL = "#4F0336", "#CC088A", "#D9C0FA"
 
 
 def bipolar(u):
@@ -48,7 +48,6 @@ def main():
         stroke-linecap="round" stroke-linejoin="round"/>
   <path d="{polyline(hx, hy)}" fill="none" stroke="{SMALL}" stroke-width="10"
         stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="{cx}" cy="{top}" r="7" fill="{GLOW}"/>
 </svg>
 '''
     out = Path(__file__).resolve().parent.parent / "csvplot" / "resources" / "icon.svg"
