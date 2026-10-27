@@ -1,7 +1,8 @@
-"""Generate csvplot/resources/icon.svg: a bipolar echo pulse rotated 90 degrees.
+"""Generate csvplot/resources/icon.svg: two bipolar echo pulses.
 
-The trace runs top to bottom; the signal swings left/right. A strong bipolar
-pulse (derivative of a Gaussian) is followed by a weaker, inverted echo.
+The small echo runs horizontally across the top. The big echo is rotated 90°:
+it runs vertically downward from the small echo's midpoint, where that pulse
+crosses zero. Each pulse is a derivative of a Gaussian.
 Run: python tools/make_icon.py
 """
 
@@ -10,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 SIZE = 256
-BG, PULSE, ECHO, GLOW = "#4F0336", "#CC088A", "#D9C0FA", "#F2EEE5"
+BG, BIG, SMALL, GLOW = "#4F0336", "#CC088A", "#D9C0FA", "#F2EEE5"
 
 
 def bipolar(u):
@@ -18,18 +19,22 @@ def bipolar(u):
     return -u * np.exp(-u * u / 2) / np.exp(-0.5)
 
 
+def polyline(xs, ys):
+    pts = [f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys)]
+    return "M" + " L".join(pts)
+
+
 def main():
     t = np.linspace(0, 1, 600)
-    top, bottom = 0.12, 0.88
-    y = top + (bottom - top) * t
-    x = bipolar((t - 0.3) / 0.05) - 0.45 * bipolar((t - 0.74) / 0.045)
-    cx, amp = SIZE / 2, SIZE * 0.29
-    px, py = cx + amp * x, SIZE * y
-    split = int(np.searchsorted(t, 0.55))
+    cx, top = SIZE * 0.5, SIZE * 0.27
 
-    def path(a, b):
-        pts = " ".join(f"{X:.1f},{Y:.1f}" for X, Y in zip(px[a:b], py[a:b]))
-        return f"M{pts.replace(' ', ' L', 1)}"
+    # Small echo: horizontal, zero crossing at the centre.
+    hx = SIZE * (0.15 + 0.70 * t)
+    hy = top + SIZE * 0.09 * bipolar((t - 0.5) / 0.065)
+
+    # Big echo: vertical, starting at the small echo's midpoint.
+    vy = top + (SIZE * 0.88 - top) * t
+    vx = cx + SIZE * 0.28 * bipolar((t - 0.52) / 0.085)
 
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SIZE} {SIZE}" width="{SIZE}" height="{SIZE}">
   <defs>
@@ -39,12 +44,11 @@ def main():
     </linearGradient>
   </defs>
   <rect x="8" y="8" width="{SIZE - 16}" height="{SIZE - 16}" rx="56" fill="url(#bg)"/>
-  <line x1="{cx}" y1="{SIZE * 0.1:.0f}" x2="{cx}" y2="{SIZE * 0.9:.0f}" stroke="{GLOW}" stroke-opacity="0.18"
-        stroke-width="4" stroke-dasharray="2 10" stroke-linecap="round"/>
-  <path d="{path(split - 1, len(t))}" fill="none" stroke="{ECHO}" stroke-width="10"
+  <path d="{polyline(vx, vy)}" fill="none" stroke="{BIG}" stroke-width="13"
         stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="{path(0, split)}" fill="none" stroke="{PULSE}" stroke-width="12"
+  <path d="{polyline(hx, hy)}" fill="none" stroke="{SMALL}" stroke-width="10"
         stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="{cx}" cy="{top}" r="7" fill="{GLOW}"/>
 </svg>
 '''
     out = Path(__file__).resolve().parent.parent / "csvplot" / "resources" / "icon.svg"
