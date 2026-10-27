@@ -213,3 +213,30 @@ def test_major_and_minor_ticks(window):
     tab.major_step["x"].setText("0.001")
     tab.major_step["x"].editingFinished.emit()
     assert not isinstance(tab.ax.xaxis.get_major_locator(), MultipleLocator)
+
+
+def test_tick_width_and_length(window):
+    tab = window.current_tab()
+    tab.tick_width["major"].setValue(1.5)
+    tab.tick_length["minor"].setValue(4)
+    tab.minor_ticks["x"].setCurrentText("2")
+    tab.canvas.draw()
+    major = tab.ax.xaxis.get_major_ticks()[0].tick1line
+    minor = tab.ax.xaxis.get_minor_ticks()[0].tick1line
+    assert major.get_markeredgewidth() == 1.5
+    assert minor.get_markersize() == 4
+
+
+def test_export_preview(window):
+    from csvplot.export import ExportDialog
+
+    tab = window.current_tab()
+    before = tuple(tab.figure.get_size_inches())
+    dialog = ExportDialog(tab.figure, "x", window, tab.export_style)
+    dialog.preset_combo.setCurrentText("Slide 16:9")
+    dialog.update_preview()
+    pixmap = dialog.preview.pixmap()
+    assert not pixmap.isNull()
+    assert abs(pixmap.width() / pixmap.height() - 16 / 9) < 0.05
+    assert tuple(tab.figure.get_size_inches()) == before
+    dialog.reject()

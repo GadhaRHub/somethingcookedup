@@ -310,6 +310,9 @@ def stylesheet(t: Theme | None = None) -> str:
     }}
 
     QLabel#hint {{ color: {t.muted}; }}
+    QLabel#export_preview {{
+        background: {t.bg}; border: 1px dashed {t.border}; border-radius: 14px;
+    }}
     QStatusBar {{ background: {t.bg}; color: {t.text}; }}
     QToolTip {{ background: {t.bar}; color: {t.bar_text}; border: none; padding: 5px 8px; }}
     """

@@ -470,6 +470,19 @@ class PlotTab(QWidget):
         self.minor_grid = QCheckBox("Minor gridlines")
         self.minor_grid.toggled.connect(lambda _: self.redraw())
         grid.addWidget(self.minor_grid, 5, 0, 1, 3)
+
+        grid.addWidget(QLabel("Width (pt)"), 6, 1)
+        grid.addWidget(QLabel("Length (pt)"), 6, 2)
+        self.tick_width, self.tick_length = {}, {}
+        for row, (which, width, length) in enumerate((("major", 0.8, 5.0), ("minor", 0.6, 2.5)), start=7):
+            w = QDoubleSpinBox(minimum=0.1, maximum=5, singleStep=0.1, decimals=1, value=width)
+            l = QDoubleSpinBox(minimum=0, maximum=20, singleStep=0.5, decimals=1, value=length)
+            for spin in (w, l):
+                spin.valueChanged.connect(lambda _: self.redraw())
+            self.tick_width[which], self.tick_length[which] = w, l
+            grid.addWidget(QLabel(which.capitalize()), row, 0)
+            grid.addWidget(w, row, 1)
+            grid.addWidget(l, row, 2)
         return box
 
     def _apply_ticks(self, ax, t: theme.Theme, fs: float) -> None:
@@ -496,8 +509,9 @@ class PlotTab(QWidget):
         mirror = self.mirror_ticks.isChecked()
         ax.tick_params(which="both", direction=TICK_DIRECTIONS[self.tick_direction.currentText()],
                        top=mirror, right=mirror)
-        ax.tick_params(which="major", length=5)
-        ax.tick_params(which="minor", length=2.5)
+        for which in ("major", "minor"):
+            ax.tick_params(which=which, width=self.tick_width[which].value(),
+                           length=self.tick_length[which].value())
         for side in ("top", "right"):
             ax.spines[side].set_visible(mirror)
             ax.spines[side].set_color(ax.spines["left"].get_edgecolor())

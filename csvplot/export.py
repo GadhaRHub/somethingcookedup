@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from io import BytesIO
 from pathlib import Path
 from typing import Callable, ContextManager
 
 import matplotlib
 from matplotlib.figure import Figure
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QFrame,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -51,11 +54,16 @@ PRESETS = {
 Restyle = Callable[[theme.Theme, "float | None"], ContextManager]
 
 
+PREVIEW_W, PREVIEW_H = 460, 360
+
+
 class ExportDialog(QDialog):
-    def __init__(self, figure: Figure, default_name: str, parent=None):
+    def __init__(self, figure: Figure, default_name: str, parent=None,
+                 restyle: Restyle | None = None):
         super().__init__(parent)
         self.setWindowTitle("Export figure")
         self.figure = figure
+        self.restyle = restyle
         self.default_name = default_name
         self.settings = QSettings("csvplot", "csvplot")
         self._applying_preset = False
@@ -113,15 +121,63 @@ class ExportDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(buttons)
+        # Live preview, drawn exactly as the file will be (size, fonts, theme,
+        # background), at a lower resolution.
+        self.preview = QLabel("Rendering preview…")
+        self.preview.setObjectName("export_preview")
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setFixedSize(PREVIEW_W + 24, PREVIEW_H + 24)
+        self.preview_caption = QLabel()
+        self.preview_caption.setObjectName("hint")
+        self.preview_caption.setAlignment(Qt.AlignCenter)
+        self._preview_timer = QTimer(self, singleShot=True, interval=250)
+        self._preview_timer.timeout.connect(self.update_preview)
+
+        preview_col = QVBoxLayout()
+        preview_col.addWidget(self.preview)
+        preview_col.addWidget(self.preview_caption)
+        settings_col = QVBoxLayout()
+        settings_col.addLayout(form)
+        settings_col.addStretch(1)
+        settings_col.addWidget(buttons)
+        layout = QHBoxLayout(self)
+        layout.addLayout(settings_col)
+        layout.addSpacing(12)
+        layout.addLayout(preview_col)
 
         self.format_combo.currentTextChanged.connect(self._update_info)
         self._load_settings()
         # Editing any preset-controlled value by hand switches back to Custom.
         for spin in (self.width, self.height, self.dpi, self.font_size):
             spin.valueChanged.connect(self._preset_edited)
+        for spin in (self.width, self.height, self.font_size):
+            spin.valueChanged.connect(self._schedule_preview)
+        for combo in (self.background, self.units):
+            combo.currentTextChanged.connect(self._schedule_preview)
+        self._schedule_preview()
+
+    def _schedule_preview(self, *_) -> None:
+        self._preview_timer.start()
+
+    def update_preview(self) -> None:
+        w_in, h_in = self.size_inches()
+        # Render small but with the real size in inches, so text and lines
+        # keep their true proportions.
+        dpi = max(20.0, min(PREVIEW_W / w_in, PREVIEW_H / h_in))
+        buffer = BytesIO()
+        try:
+            save_figure(self.figure, buffer, (w_in, h_in), dpi, self.background.currentText(),
+                        self.restyle, self.export_font_size, fmt="png")
+        except Exception as exc:  # noqa: BLE001 - show the problem instead of a preview
+            self.preview.setText(f"Preview failed:\n{exc}")
+            return
+        pixmap = QPixmap()
+        pixmap.loadFromData(buffer.getvalue(), "PNG")
+        self.preview.setPixmap(pixmap)
+        unit = self.units.currentText()
+        self.preview_caption.setText(
+            f"Preview: {self.width.value():.1f} × {self.height.value():.1f} {unit}, "
+            f"{self.font_size.value() or 'screen'}{' pt' if self.font_size.value() else ''} font")
 
     def _on_figure_preset(self, name: str) -> None:
         if name not in PRESETS:
@@ -226,8 +282,9 @@ class ExportDialog(QDialog):
         return path
 
 
-def save_figure(figure: Figure, path: str, size_inches, dpi: int, background: str,
-                restyle: Restyle | None = None, font_size: float | None = None) -> None:
+def save_figure(figure: Figure, path: "str | BytesIO", size_inches, dpi: float, background: str,
+                restyle: Restyle | None = None, font_size: float | None = None,
+                fmt: str | None = None) -> None:
     """Write ``figure`` to ``path`` at the given size and resolution.
 
     ``restyle(theme, font_size)`` is a context manager that temporarily redraws
@@ -235,7 +292,7 @@ def save_figure(figure: Figure, path: str, size_inches, dpi: int, background: st
     exports with dark text on a white or transparent background. The on-screen
     figure is restored afterwards.
     """
-    ext = Path(path).suffix.lower().lstrip(".")
+    ext = fmt or Path(path).suffix.lower().lstrip(".")
     original = figure.get_size_inches().copy()
     kwargs = {"dpi": dpi, "format": {"jpg": "jpeg", "tif": "tiff"}.get(ext, ext)}
     if background == "Transparent":
@@ -255,6 +312,9 @@ def _save(figure, path, size_inches, background, original, kwargs) -> None:
     axes_colors = [ax.get_facecolor() for ax in figure.axes]
     try:
         figure.set_size_inches(*size_inches, forward=False)
+        # Lay out once at the new size first; otherwise the first save can use
+        # stale tick-label sizes and clip the axes edge.
+        figure.draw_without_rendering()
         if background == "White":
             for ax in figure.axes:
                 ax.set_facecolor("white")
@@ -269,7 +329,7 @@ def _save(figure, path, size_inches, background, original, kwargs) -> None:
 def export_figure(figure: Figure, default_name: str, parent=None,
                   restyle: Restyle | None = None) -> str | None:
     """Show the export dialog and save; returns the written path, if any."""
-    dialog = ExportDialog(figure, default_name, parent)
+    dialog = ExportDialog(figure, default_name, parent, restyle)
     if dialog.exec() != QDialog.Accepted:
         return None
     dialog._save_settings()
