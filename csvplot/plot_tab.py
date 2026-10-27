@@ -1,0 +1,762 @@
+"""One plot: an interactive matplotlib canvas plus its control panel."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import matplotlib
+import numpy as np
+from matplotlib.backend_bases import _Mode
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.colors import ListedColormap, to_hex
+from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.widgets import SpanSelector
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QColor, QDoubleValidator
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .loaders import Dataset
+
+ROW_INDEX = "(row index)"
+
+DEFAULT_COLORS = [to_hex(c) for c in matplotlib.colormaps["tab10"].colors]
+
+COLORMAPS = [
+    "viridis", "plasma", "inferno", "magma", "cividis", "turbo",
+    "coolwarm", "Spectral", "RdYlBu", "rainbow", "jet",
+    "tab10", "tab20", "Set1", "Dark2", "Paired",
+]
+
+PLOT_STYLES = ["Line", "Markers", "Line + markers"]
+
+LEGEND_LOCATIONS = [
+    "best", "upper right", "upper left", "lower left", "lower right",
+    "center left", "center right", "lower center", "upper center", "center",
+]
+
+PICK_RADIUS_PX = 12
+
+
+@dataclass
+class Series:
+    dataset: Dataset
+    column: str
+    color: str
+    visible: bool = True
+
+
+@dataclass
+class PointMark:
+    x: float
+    y: float
+    color: str
+    offset: tuple[float, float] = (10.0, 10.0)
+    artists: list = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return f"({self.x:.6g}, {self.y:.6g})"
+
+
+@dataclass
+class RegionMark:
+    xmin: float
+    xmax: float
+    color: str
+    artists: list = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return f"{self.xmin:.6g} → {self.xmax:.6g}"
+
+
+class ColorButton(QPushButton):
+    """A small swatch that opens a colour picker when clicked."""
+
+    colorChanged = Signal(str)
+
+    def __init__(self, color: str, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(34, 20)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Choose colour")
+        self.clicked.connect(self._pick)
+        self.set_color(color)
+
+    @property
+    def color(self) -> str:
+        return self._color
+
+    def set_color(self, color: str) -> None:
+        self._color = color
+        self.setStyleSheet(
+            f"QPushButton {{ background: {color}; border: 1px solid #555; border-radius: 3px; }}"
+            "QPushButton:disabled { border: 1px dashed #999; }"
+        )
+
+    def _pick(self) -> None:
+        chosen = QColorDialog.getColor(QColor(self._color), self, "Choose colour")
+        if chosen.isValid():
+            self.set_color(chosen.name())
+            self.colorChanged.emit(chosen.name())
+
+
+def _float_edit(placeholder: str) -> QLineEdit:
+    edit = QLineEdit()
+    edit.setPlaceholderText(placeholder)
+    edit.setValidator(QDoubleValidator())
+    return edit
+
+
+class PlotTab(QWidget):
+    """Interactive plot of one or more datasets."""
+
+    statusMessage = Signal(str)
+
+    def __init__(self, dataset: Dataset, parent=None):
+        super().__init__(parent)
+        self.datasets: list[Dataset] = []
+        self.series: list[Series] = []
+        self.point_marks: list[PointMark] = []
+        self.region_marks: list[RegionMark] = []
+        self._data_lines: list = []
+        self._span: SpanSelector | None = None
+        self._syncing = False
+        self._last_scales = ("linear", "linear")
+
+        self._build_ui()
+        self.add_dataset(dataset)
+
+    # ------------------------------------------------------------------ UI
+    def _build_ui(self) -> None:
+        self.figure = Figure(figsize=(8, 5), layout="tight")
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.setFocusPolicy(Qt.StrongFocus)
+        self.ax = self.figure.add_subplot()
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+
+        self.toolbar.addSeparator()
+        self.act_mark_point = QAction("Mark point", self, checkable=True)
+        self.act_mark_point.setToolTip(
+            "Click on the plot to mark a point (snaps to the nearest data point).\n"
+            "Right-click a mark to remove it."
+        )
+        self.act_mark_region = QAction("Mark region", self, checkable=True)
+        self.act_mark_region.setToolTip("Drag horizontally on the plot to shade an x-range.")
+        self.toolbar.addAction(self.act_mark_point)
+        self.toolbar.addAction(self.act_mark_region)
+        self.act_mark_point.toggled.connect(lambda on: self._set_mark_mode("point", on))
+        self.act_mark_region.toggled.connect(lambda on: self._set_mark_mode("region", on))
+        # Turning on matplotlib's pan/zoom switches marking off, and vice versa.
+        for name in ("pan", "zoom"):
+            if name in self.toolbar._actions:
+                self.toolbar._actions[name].triggered.connect(self._on_nav_mode)
+
+        self.coord_label = QLabel("Move the mouse over the plot to see coordinates")
+        self.coord_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.coord_label.setStyleSheet("font-family: monospace; padding: 2px 4px;")
+
+        plot_area = QWidget()
+        pl = QVBoxLayout(plot_area)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.addWidget(self.toolbar)
+        pl.addWidget(self.canvas, 1)
+        pl.addWidget(self.coord_label)
+
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.addWidget(self._build_data_group())
+        panel_layout.addWidget(self._build_color_group())
+        panel_layout.addWidget(self._build_label_group())
+        panel_layout.addWidget(self._build_axes_group())
+        panel_layout.addWidget(self._build_marks_group())
+        panel_layout.addStretch(1)
+
+        self.controls = QScrollArea()
+        self.controls.setWidget(panel)
+        self.controls.setWidgetResizable(True)
+        self.controls.setMinimumWidth(300)
+        self.controls.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(plot_area)
+        splitter.addWidget(self.controls)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([900, 330])
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(splitter)
+
+        self.canvas.mpl_connect("motion_notify_event", self._on_motion)
+        self.canvas.mpl_connect("button_press_event", self._on_press)
+        self.canvas.mpl_connect("scroll_event", self._on_scroll)
+        self.canvas.mpl_connect("axes_leave_event", lambda e: self.coord_label.setText(""))
+
+    def _build_data_group(self) -> QGroupBox:
+        box = QGroupBox("Data")
+        form = QFormLayout(box)
+
+        self.x_combo = QComboBox()
+        self.x_combo.currentTextChanged.connect(lambda _: self.redraw(keep_view=False))
+        form.addRow("X axis", self.x_combo)
+
+        self.series_table = QTableWidget(0, 2)
+        self.series_table.setHorizontalHeaderLabels(["Y series", "Colour"])
+        self.series_table.verticalHeader().hide()
+        self.series_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.series_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.series_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.series_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.series_table.itemChanged.connect(self._on_series_toggled)
+        form.addRow(self.series_table)
+
+        self.style_combo = QComboBox()
+        self.style_combo.addItems(PLOT_STYLES)
+        self.style_combo.currentIndexChanged.connect(lambda _: self.redraw())
+        form.addRow("Style", self.style_combo)
+
+        self.line_width = QDoubleSpinBox(minimum=0.1, maximum=10, singleStep=0.25, value=1.5)
+        self.line_width.valueChanged.connect(lambda _: self.redraw())
+        form.addRow("Line width", self.line_width)
+
+        self.marker_size = QDoubleSpinBox(minimum=0.5, maximum=20, singleStep=0.5, value=3)
+        self.marker_size.valueChanged.connect(lambda _: self.redraw())
+        form.addRow("Marker size", self.marker_size)
+        return box
+
+    def _build_color_group(self) -> QGroupBox:
+        box = QGroupBox("Colours")
+        form = QFormLayout(box)
+        self.use_cmap = QCheckBox("Colour series with a colormap")
+        self.use_cmap.setToolTip("Useful when several series are plotted together.")
+        self.use_cmap.toggled.connect(self._on_cmap_toggled)
+        form.addRow(self.use_cmap)
+
+        self.cmap_combo = QComboBox()
+        self.cmap_combo.addItems(COLORMAPS)
+        self.cmap_combo.setEnabled(False)
+        self.cmap_combo.currentTextChanged.connect(lambda _: self.redraw())
+        self.cmap_reverse = QCheckBox("Reverse")
+        self.cmap_reverse.setEnabled(False)
+        self.cmap_reverse.toggled.connect(lambda _: self.redraw())
+        row = QHBoxLayout()
+        row.addWidget(self.cmap_combo, 1)
+        row.addWidget(self.cmap_reverse)
+        form.addRow("Colormap", row)
+        return box
+
+    def _build_label_group(self) -> QGroupBox:
+        box = QGroupBox("Title && legend")
+        form = QFormLayout(box)
+        self.title_edit = QLineEdit()
+        self.xlabel_edit = QLineEdit()
+        self.ylabel_edit = QLineEdit()
+        for edit in (self.title_edit, self.xlabel_edit, self.ylabel_edit):
+            edit.editingFinished.connect(self.redraw)
+        form.addRow("Title", self.title_edit)
+        form.addRow("X label", self.xlabel_edit)
+        form.addRow("Y label", self.ylabel_edit)
+
+        self.font_size = QDoubleSpinBox(minimum=5, maximum=40, singleStep=1, value=11)
+        self.font_size.valueChanged.connect(lambda _: self.redraw())
+        form.addRow("Font size", self.font_size)
+
+        self.legend_check = QCheckBox("Show legend")
+        self.legend_check.setChecked(True)
+        self.legend_check.setToolTip("The legend can be dragged with the mouse.")
+        self.legend_check.toggled.connect(lambda _: self.redraw())
+        self.legend_loc = QComboBox()
+        self.legend_loc.addItems(LEGEND_LOCATIONS)
+        self.legend_loc.currentTextChanged.connect(lambda _: self.redraw())
+        row = QHBoxLayout()
+        row.addWidget(self.legend_check)
+        row.addWidget(self.legend_loc, 1)
+        form.addRow(row)
+
+        self.grid_check = QCheckBox("Show grid")
+        self.grid_check.setChecked(True)
+        self.grid_check.toggled.connect(lambda _: self.redraw())
+        form.addRow(self.grid_check)
+        return box
+
+    def _build_axes_group(self) -> QGroupBox:
+        box = QGroupBox("Axis ranges")
+        grid = QGridLayout(box)
+        self.xmin_edit, self.xmax_edit = _float_edit("x min"), _float_edit("x max")
+        self.ymin_edit, self.ymax_edit = _float_edit("y min"), _float_edit("y max")
+        grid.addWidget(QLabel("X"), 0, 0)
+        grid.addWidget(self.xmin_edit, 0, 1)
+        grid.addWidget(self.xmax_edit, 0, 2)
+        grid.addWidget(QLabel("Y"), 1, 0)
+        grid.addWidget(self.ymin_edit, 1, 1)
+        grid.addWidget(self.ymax_edit, 1, 2)
+        for edit in (self.xmin_edit, self.xmax_edit, self.ymin_edit, self.ymax_edit):
+            edit.returnPressed.connect(self.apply_ranges)
+
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self.apply_ranges)
+        auto_btn = QPushButton("Auto-fit")
+        auto_btn.clicked.connect(self.autoscale)
+        grid.addWidget(apply_btn, 2, 1)
+        grid.addWidget(auto_btn, 2, 2)
+
+        self.logx_check = QCheckBox("Log X")
+        self.logy_check = QCheckBox("Log Y")
+        self.logx_check.toggled.connect(lambda _: self.redraw(keep_view=False))
+        self.logy_check.toggled.connect(lambda _: self.redraw(keep_view=False))
+        grid.addWidget(self.logx_check, 3, 1)
+        grid.addWidget(self.logy_check, 3, 2)
+        return box
+
+    def _build_marks_group(self) -> QGroupBox:
+        box = QGroupBox("Marks")
+        layout = QVBoxLayout(box)
+
+        hint = QLabel(
+            "Use <b>Mark point</b> / <b>Mark region</b> in the plot toolbar. "
+            "Right-click a mark to remove it."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Colour"))
+        self.mark_color = ColorButton("#d62728")
+        row.addWidget(self.mark_color)
+        self.snap_check = QCheckBox("Snap to data")
+        self.snap_check.setChecked(True)
+        row.addWidget(self.snap_check)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.marks_list = QListWidget()
+        self.marks_list.setMinimumHeight(80)
+        self.marks_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        layout.addWidget(self.marks_list)
+
+        row = QHBoxLayout()
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.clicked.connect(self._remove_selected_marks)
+        clear_btn = QPushButton("Clear all")
+        clear_btn.clicked.connect(self.clear_marks)
+        row.addWidget(remove_btn)
+        row.addWidget(clear_btn)
+        layout.addLayout(row)
+        return box
+
+    # ------------------------------------------------------------ datasets
+    def add_dataset(self, dataset: Dataset) -> None:
+        self.datasets.append(dataset)
+        x_default = self.x_column or (dataset.numeric_columns[0] if dataset.numeric_columns else ROW_INDEX)
+        for col in dataset.numeric_columns:
+            color = DEFAULT_COLORS[len(self.series) % len(DEFAULT_COLORS)]
+            self.series.append(Series(dataset, col, color, visible=col != x_default))
+        if not any(s.visible for s in self.series) and self.series:
+            self.series[-1].visible = True
+        self._refresh_x_combo(x_default)
+        self._refresh_series_table()
+        self.redraw(keep_view=False)
+
+    @property
+    def title(self) -> str:
+        return " + ".join(d.name for d in self.datasets)
+
+    @property
+    def x_column(self) -> str | None:
+        return self.x_combo.currentText() or None
+
+    def _refresh_x_combo(self, select: str) -> None:
+        # Offer columns shared by every dataset; files lacking the chosen
+        # column fall back to their own first column.
+        common = list(self.datasets[0].numeric_columns)
+        for ds in self.datasets[1:]:
+            common = [c for c in common if c in ds.numeric_columns]
+        options = [ROW_INDEX] + (common or self.datasets[0].numeric_columns)
+        self.x_combo.blockSignals(True)
+        self.x_combo.clear()
+        self.x_combo.addItems(options)
+        self.x_combo.setCurrentText(select if select in options else options[min(1, len(options) - 1)])
+        self.x_combo.blockSignals(False)
+
+    def _series_label(self, s: Series) -> str:
+        return s.column if len(self.datasets) == 1 else f"{s.dataset.path.stem}: {s.column}"
+
+    def _refresh_series_table(self) -> None:
+        table = self.series_table
+        table.blockSignals(True)
+        table.setRowCount(len(self.series))
+        for row, s in enumerate(self.series):
+            item = QTableWidgetItem(self._series_label(s))
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if s.visible else Qt.Unchecked)
+            item.setToolTip(f"{s.dataset.path}\n{s.column}")
+            table.setItem(row, 0, item)
+            button = ColorButton(s.color)
+            button.colorChanged.connect(lambda c, s=s: self._set_series_color(s, c))
+            holder = QWidget()
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(4, 1, 4, 1)
+            hl.addWidget(button)
+            table.setCellWidget(row, 1, holder)
+        table.blockSignals(False)
+        table.resizeRowsToContents()
+        rows_height = sum(table.rowHeight(r) for r in range(table.rowCount()))
+        table.setFixedHeight(min(260, table.horizontalHeader().height() + rows_height + 4))
+
+    def _color_buttons(self) -> list[ColorButton]:
+        return [self.series_table.cellWidget(r, 1).findChild(ColorButton)
+                for r in range(self.series_table.rowCount())]
+
+    def _on_series_toggled(self, item: QTableWidgetItem) -> None:
+        self.series[item.row()].visible = item.checkState() == Qt.Checked
+        self.redraw(keep_view=False)
+
+    def _set_series_color(self, s: Series, color: str) -> None:
+        s.color = color
+        self.redraw()
+
+    def _on_cmap_toggled(self, on: bool) -> None:
+        self.cmap_combo.setEnabled(on)
+        self.cmap_reverse.setEnabled(on)
+        self.redraw()
+
+    # -------------------------------------------------------------- colours
+    def _visible_series_colors(self) -> list[tuple[Series, str]]:
+        visible = [s for s in self.series if s.visible]
+        if not self.use_cmap.isChecked() or not visible:
+            return [(s, s.color) for s in visible]
+        cmap = matplotlib.colormaps[self.cmap_combo.currentText()]
+        if self.cmap_reverse.isChecked():
+            cmap = cmap.reversed()
+        n = len(visible)
+        if isinstance(cmap, ListedColormap) and cmap.N <= 20:
+            # Qualitative maps: take consecutive distinct colours.
+            colors = [cmap(i % cmap.N) for i in range(n)]
+        else:
+            # Stop short of the top end, which is near-white in many maps.
+            colors = [cmap(v) for v in (np.linspace(0, 0.85, n) if n > 1 else [0.4])]
+        return [(s, to_hex(c)) for s, c in zip(visible, colors)]
+
+    def _x_values(self, ds: Dataset) -> tuple[np.ndarray, str]:
+        col = self.x_column
+        if col == ROW_INDEX or not ds.numeric_columns:
+            return np.arange(len(ds.frame), dtype=float), "row index"
+        if col not in ds.frame.columns:
+            col = ds.numeric_columns[0]
+        return ds.frame[col].to_numpy(dtype=float), col
+
+    # -------------------------------------------------------------- drawing
+    def redraw(self, keep_view: bool = True) -> None:
+        ax = self.ax
+        scales = ("log" if self.logx_check.isChecked() else "linear",
+                  "log" if self.logy_check.isChecked() else "linear")
+        keep_view = keep_view and bool(self._data_lines) and scales == self._last_scales
+        xlim, ylim = ax.get_xlim(), ax.get_ylim()
+        for mark in self.point_marks:
+            # Remember where the user dragged the label to.
+            if len(mark.artists) == 2:
+                mark.offset = tuple(mark.artists[1].xyann)
+
+        ax.clear()
+        ax.set_xscale(scales[0])
+        ax.set_yscale(scales[1])
+        self._last_scales = scales
+
+        style = self.style_combo.currentText()
+        linestyle = "None" if style == "Markers" else "-"
+        marker = "o" if "arker" in style else ""
+        fs = self.font_size.value()
+
+        self._data_lines = []
+        colored = self._visible_series_colors()
+        use_cmap = self.use_cmap.isChecked()
+        color_of = {id(s): c for s, c in colored}
+        for button, s in zip(self._color_buttons(), self.series):
+            button.setEnabled(not use_cmap)
+            button.set_color(color_of.get(id(s), s.color) if use_cmap else s.color)
+        for s, color in colored:
+            x, _ = self._x_values(s.dataset)
+            y = s.dataset.frame[s.column].to_numpy(dtype=float)
+            (line,) = ax.plot(
+                x, y, color=color, label=self._series_label(s), linestyle=linestyle,
+                linewidth=self.line_width.value(), marker=marker,
+                markersize=self.marker_size.value(),
+            )
+            self._data_lines.append(line)
+
+        visible = [s for s, _ in colored]
+        x_names = {self._x_values(s.dataset)[1] for s in visible} or {self.x_column or ""}
+        auto_x = " / ".join(sorted(x_names))
+        auto_y = visible[0].column if len({s.column for s in visible}) == 1 else ""
+        auto_title = self.title
+        self.title_edit.setPlaceholderText(f"(auto) {auto_title}")
+        self.xlabel_edit.setPlaceholderText(f"(auto) {auto_x}")
+        self.ylabel_edit.setPlaceholderText(f"(auto) {auto_y}" if auto_y else "(none)")
+        ax.set_title(self.title_edit.text() or auto_title, fontsize=fs + 2)
+        ax.set_xlabel(self.xlabel_edit.text() or auto_x, fontsize=fs)
+        ax.set_ylabel(self.ylabel_edit.text() or auto_y, fontsize=fs)
+        ax.tick_params(labelsize=fs - 1)
+        if self.grid_check.isChecked():
+            ax.grid(True, alpha=0.3)
+        if self.legend_check.isChecked() and self._data_lines:
+            legend = ax.legend(loc=self.legend_loc.currentText(), fontsize=fs - 1)
+            legend.set_draggable(True)
+
+        self._draw_marks()
+
+        if keep_view:
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+        else:
+            ax.relim(visible_only=True)
+            ax.autoscale(True)
+            ax.autoscale_view()
+
+        # ax.clear() drops axes callbacks, so reconnect every time.
+        ax.callbacks.connect("xlim_changed", lambda _: self._sync_range_fields())
+        ax.callbacks.connect("ylim_changed", lambda _: self._sync_range_fields())
+        self._make_span_selector()
+        self._sync_range_fields()
+        self.canvas.draw_idle()
+        if not keep_view:
+            self.toolbar.update()  # reset the Home/Back/Forward history
+            self.toolbar.push_current()
+
+    def _draw_marks(self) -> None:
+        fs = self.font_size.value()
+        for mark in self.region_marks:
+            mark.artists = [self.ax.axvspan(mark.xmin, mark.xmax, color=mark.color,
+                                            alpha=0.2, zorder=0, linewidth=0)]
+        for mark in self.point_marks:
+            (dot,) = self.ax.plot([mark.x], [mark.y], marker="o", markersize=9,
+                                  markerfacecolor="none", markeredgewidth=2,
+                                  color=mark.color, zorder=5, scalex=False, scaley=False)
+            ann = self.ax.annotate(
+                mark.text, (mark.x, mark.y), xytext=mark.offset, textcoords="offset points",
+                fontsize=fs - 1, color=mark.color, zorder=6,
+                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec=mark.color, alpha=0.85),
+                arrowprops=dict(arrowstyle="-", color=mark.color, lw=1),
+            )
+            ann.draggable(True)
+            mark.artists = [dot, ann]
+
+    def _make_span_selector(self) -> None:
+        if self._span is not None:
+            self._span.disconnect_events()
+        self._span = SpanSelector(
+            self.ax, self._on_span, "horizontal", useblit=True, button=1,
+            props=dict(alpha=0.2, facecolor=self.mark_color.color),
+        )
+        self._span.set_active(self.act_mark_region.isChecked())
+
+    # --------------------------------------------------------------- ranges
+    def _sync_range_fields(self) -> None:
+        if self._syncing:
+            return
+        (x0, x1), (y0, y1) = self.ax.get_xlim(), self.ax.get_ylim()
+        for edit, value in ((self.xmin_edit, x0), (self.xmax_edit, x1),
+                            (self.ymin_edit, y0), (self.ymax_edit, y1)):
+            if not edit.hasFocus():
+                edit.setText(f"{value:.6g}")
+
+    def apply_ranges(self) -> None:
+        def parse(edit: QLineEdit, current: float) -> float:
+            try:
+                return float(edit.text())
+            except ValueError:
+                return current
+
+        (x0, x1), (y0, y1) = self.ax.get_xlim(), self.ax.get_ylim()
+        x0, x1 = parse(self.xmin_edit, x0), parse(self.xmax_edit, x1)
+        y0, y1 = parse(self.ymin_edit, y0), parse(self.ymax_edit, y1)
+        if x0 == x1 or y0 == y1:
+            QMessageBox.warning(self, "Invalid range", "Minimum and maximum must differ.")
+            return
+        if (self.logx_check.isChecked() and min(x0, x1) <= 0) or (
+            self.logy_check.isChecked() and min(y0, y1) <= 0
+        ):
+            QMessageBox.warning(self, "Invalid range", "Log axes need positive limits.")
+            return
+        self._syncing = True
+        self.ax.set_xlim(x0, x1)
+        self.ax.set_ylim(y0, y1)
+        self._syncing = False
+        self._sync_range_fields()
+        self.toolbar.push_current()
+        self.canvas.draw_idle()
+
+    def autoscale(self) -> None:
+        self.ax.relim(visible_only=True)
+        self.ax.autoscale(True)
+        self.ax.autoscale_view()
+        self.toolbar.push_current()
+        self.canvas.draw_idle()
+
+    # ---------------------------------------------------------------- marks
+    def _set_mark_mode(self, mode: str, on: bool) -> None:
+        if on:
+            other = self.act_mark_region if mode == "point" else self.act_mark_point
+            other.setChecked(False)
+            # Leave matplotlib's pan/zoom mode so clicks reach us.
+            if self.toolbar.mode == _Mode.PAN:
+                self.toolbar.pan()
+            elif self.toolbar.mode == _Mode.ZOOM:
+                self.toolbar.zoom()
+        if mode == "region" and self._span is not None:
+            self._span.set_props(facecolor=self.mark_color.color)
+            self._span.set_active(on)
+        self.canvas.setCursor(Qt.CrossCursor if self._mark_mode() else Qt.ArrowCursor)
+
+    def _mark_mode(self) -> str | None:
+        if self.act_mark_point.isChecked():
+            return "point"
+        if self.act_mark_region.isChecked():
+            return "region"
+        return None
+
+    def _on_nav_mode(self) -> None:
+        if self.toolbar.mode != _Mode.NONE:
+            self.act_mark_point.setChecked(False)
+            self.act_mark_region.setChecked(False)
+
+    def _on_span(self, xmin: float, xmax: float) -> None:
+        if xmin == xmax:
+            return
+        self.region_marks.append(RegionMark(xmin, xmax, self.mark_color.color))
+        self._after_marks_changed()
+
+    def _nearest_data_point(self, event) -> tuple[float, float, Line2D | None, float]:
+        """Nearest plotted point to the mouse, in screen pixels."""
+        best = (event.xdata, event.ydata, None, np.inf)
+        for line in self._data_lines:
+            xy = np.column_stack(line.get_data()).astype(float)
+            finite = np.isfinite(xy).all(axis=1)
+            if not finite.any():
+                continue
+            xy = xy[finite]
+            screen = self.ax.transData.transform(xy)
+            d = np.hypot(screen[:, 0] - event.x, screen[:, 1] - event.y)
+            i = int(np.argmin(d))
+            if d[i] < best[3]:
+                best = (xy[i, 0], xy[i, 1], line, d[i])
+        return best
+
+    def _mark_at(self, event):
+        """Return the mark under the mouse, if any."""
+        for mark in reversed(self.point_marks):
+            sx, sy = self.ax.transData.transform((mark.x, mark.y))
+            if np.hypot(sx - event.x, sy - event.y) < PICK_RADIUS_PX or (
+                len(mark.artists) == 2 and mark.artists[1].contains(event)[0]
+            ):
+                return mark
+        for mark in reversed(self.region_marks):
+            if mark.artists and mark.artists[0].contains(event)[0]:
+                return mark
+        return None
+
+    def _on_press(self, event) -> None:
+        if event.inaxes is not self.ax or self.toolbar.mode != _Mode.NONE:
+            return
+        if event.button == 3:
+            mark = self._mark_at(event)
+            if mark is not None:
+                (self.point_marks if isinstance(mark, PointMark) else self.region_marks).remove(mark)
+                self._after_marks_changed()
+            return
+        if event.button != 1 or self._mark_mode() != "point" or event.dblclick:
+            return
+        # Clicking an existing label drags it rather than adding a new mark.
+        if any(len(m.artists) == 2 and m.artists[1].contains(event)[0] for m in self.point_marks):
+            return
+        x, y = event.xdata, event.ydata
+        if self.snap_check.isChecked():
+            x, y, _, _ = self._nearest_data_point(event)
+        self.point_marks.append(PointMark(float(x), float(y), self.mark_color.color))
+        self._after_marks_changed()
+
+    def _after_marks_changed(self) -> None:
+        self.marks_list.clear()
+        for mark in self.point_marks:
+            item = QListWidgetItem(f"Point  {mark.text}")
+            item.setForeground(QColor(mark.color))
+            item.setData(Qt.UserRole, mark)
+            self.marks_list.addItem(item)
+        for mark in self.region_marks:
+            item = QListWidgetItem(f"Region  {mark.text}")
+            item.setForeground(QColor(mark.color))
+            item.setData(Qt.UserRole, mark)
+            self.marks_list.addItem(item)
+        self.redraw()
+
+    def _remove_selected_marks(self) -> None:
+        selected = {id(i.data(Qt.UserRole)) for i in self.marks_list.selectedItems()}
+        self.point_marks = [m for m in self.point_marks if id(m) not in selected]
+        self.region_marks = [m for m in self.region_marks if id(m) not in selected]
+        self._after_marks_changed()
+
+    def clear_marks(self) -> None:
+        self.point_marks.clear()
+        self.region_marks.clear()
+        self._after_marks_changed()
+
+    # ---------------------------------------------------------------- mouse
+    def _on_motion(self, event) -> None:
+        if event.inaxes is not self.ax or event.xdata is None:
+            return
+        text = f"x = {event.xdata:<12.6g}  y = {event.ydata:<12.6g}"
+        if self._data_lines:
+            x, y, line, dist = self._nearest_data_point(event)
+            if line is not None and dist < 40:
+                text += f"   │  nearest {line.get_label()}: ({x:.6g}, {y:.6g})"
+        self.coord_label.setText(text)
+
+    def _on_scroll(self, event) -> None:
+        """Mouse-wheel zoom around the cursor. Shift: x only, Ctrl: y only."""
+        if event.inaxes is not self.ax:
+            return
+        factor = 1 / 1.2 if event.button == "up" else 1.2
+        key = (event.key or "").lower()
+        zoom_x = "control" not in key and "ctrl" not in key
+        zoom_y = "shift" not in key
+
+        def zoom(lim, center, scale):
+            if scale == "log":
+                lo, hi, c = np.log10(lim[0]), np.log10(lim[1]), np.log10(center)
+                return 10 ** (c - (c - lo) * factor), 10 ** (c + (hi - c) * factor)
+            return center - (center - lim[0]) * factor, center + (lim[1] - center) * factor
+
+        if zoom_x:
+            self.ax.set_xlim(zoom(self.ax.get_xlim(), event.xdata, self.ax.get_xscale()))
+        if zoom_y:
+            self.ax.set_ylim(zoom(self.ax.get_ylim(), event.ydata, self.ax.get_yscale()))
+        self.toolbar.push_current()
+        self.canvas.draw_idle()
+
+    def save_figure(self) -> None:
+        self.toolbar.save_figure()
