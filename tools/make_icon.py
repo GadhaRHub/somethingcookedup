@@ -75,12 +75,12 @@ def main():
     </linearGradient>
   </defs>
   <rect x="8" y="8" width="{SIZE - 16}" height="{SIZE - 16}" rx="56" fill="url(#bg)"/>
-  <path d="{polyline(hx, hy)}" fill="none" stroke="url(#small)" stroke-width="{SMALL_W}"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- The big echo grows out of the small one: same width and colour at the junction. -->
-  <circle cx="{vx[0]:.1f}" cy="{vy[0]:.1f}" r="{SMALL_W / 2}" fill="{BLEND}"/>
+  <!-- The big echo sits behind the small one and grows out of it: same width
+       and colour at the junction. -->
   <path d="{ribbon(vx, vy, vw)}" fill="url(#big)"/>
   <circle cx="{vx[-1]:.1f}" cy="{vy[-1]:.1f}" r="{BIG_W / 2}" fill="{BIG}"/>
+  <path d="{polyline(hx, hy)}" fill="none" stroke="url(#small)" stroke-width="{SMALL_W}"
+        stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 '''
     out = Path(__file__).resolve().parent.parent / "csvplot" / "resources" / "icon.svg"

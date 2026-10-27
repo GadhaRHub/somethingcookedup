@@ -49,6 +49,10 @@ You can also drag files onto the window.
   (Berry, Forest, viridis, plasma, turbo, coolwarm, tab10, …, can be reversed).
   You can also set the title, axis labels, font size, legend on/off and position,
   and the grid.
+- **Ticks**: set the major tick step and the number of minor subdivisions (Off, Auto,
+  2, 4, 5, 10) for each axis. You can also set the tick direction (outside, inside or
+  both), put ticks on all four sides for a boxed, journal-style frame, and turn on
+  minor gridlines.
 - **Axis ranges**: type the min/max values and Apply, or use Auto-fit. The boxes
   update as you pan and zoom. Log scale for X and/or Y.
 - **High-quality export** (File → Export figure, Ctrl+S, or the toolbar's save icon):

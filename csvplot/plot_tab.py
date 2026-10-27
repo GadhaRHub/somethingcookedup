@@ -13,6 +13,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.colors import ListedColormap, to_hex
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+from matplotlib.ticker import AutoMinorLocator, LogLocator, MultipleLocator, NullLocator
 from matplotlib.widgets import SpanSelector
 from PySide6.QtCore import QByteArray, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QDoubleValidator, QIcon, QPainter, QPixmap
@@ -67,6 +68,10 @@ LEGEND_LOCATIONS = [
     "best", "upper right", "upper left", "lower left", "lower right",
     "center left", "center right", "lower center", "upper center", "center",
 ]
+
+MINOR_TICKS = ["Off", "Auto", "2", "4", "5", "10"]  # subdivisions between major ticks
+TICK_DIRECTIONS = {"Outside": "out", "Inside": "in", "Both": "inout"}
+MAX_TICKS = 500
 
 PICK_RADIUS_PX = 12
 
@@ -235,6 +240,7 @@ class PlotTab(QWidget):
         panel_layout.addWidget(self._build_color_group())
         panel_layout.addWidget(self._build_label_group())
         panel_layout.addWidget(self._build_axes_group())
+        panel_layout.addWidget(self._build_ticks_group())
         panel_layout.addWidget(self._build_marks_group())
         panel_layout.addStretch(1)
 
@@ -431,6 +437,72 @@ class PlotTab(QWidget):
         grid.addWidget(self.logx_check, 3, 1)
         grid.addWidget(self.logy_check, 3, 2)
         return box
+
+    def _build_ticks_group(self) -> QGroupBox:
+        box = QGroupBox("Ticks")
+        grid = QGridLayout(box)
+        grid.addWidget(QLabel("Major step"), 0, 1)
+        grid.addWidget(QLabel("Minor ticks"), 0, 2)
+        self.major_step, self.minor_ticks = {}, {}
+        for row, axis in enumerate(("x", "y"), start=1):
+            step = _float_edit("auto")
+            step.setToolTip("Distance between major ticks. Leave empty for automatic.\n"
+                            "(Ignored on log axes.)")
+            step.editingFinished.connect(self.redraw)
+            minor = QComboBox()
+            minor.addItems(MINOR_TICKS)
+            minor.setToolTip("Number of minor intervals between major ticks.")
+            minor.currentTextChanged.connect(lambda _: self.redraw())
+            self.major_step[axis], self.minor_ticks[axis] = step, minor
+            grid.addWidget(QLabel(axis.upper()), row, 0)
+            grid.addWidget(step, row, 1)
+            grid.addWidget(minor, row, 2)
+
+        self.tick_direction = QComboBox()
+        self.tick_direction.addItems(TICK_DIRECTIONS)
+        self.tick_direction.currentTextChanged.connect(lambda _: self.redraw())
+        grid.addWidget(QLabel("Direction"), 3, 0)
+        grid.addWidget(self.tick_direction, 3, 1, 1, 2)
+
+        self.mirror_ticks = QCheckBox("Ticks on all four sides (boxed)")
+        self.mirror_ticks.toggled.connect(lambda _: self.redraw())
+        grid.addWidget(self.mirror_ticks, 4, 0, 1, 3)
+        self.minor_grid = QCheckBox("Minor gridlines")
+        self.minor_grid.toggled.connect(lambda _: self.redraw())
+        grid.addWidget(self.minor_grid, 5, 0, 1, 3)
+        return box
+
+    def _apply_ticks(self, ax, t: theme.Theme, fs: float) -> None:
+        for name, axis, lim in (("x", ax.xaxis, ax.get_xlim()), ("y", ax.yaxis, ax.get_ylim())):
+            is_log = (ax.get_xscale() if name == "x" else ax.get_yscale()) == "log"
+            try:
+                step = float(self.major_step[name].text())
+            except ValueError:
+                step = 0
+            if step > 0 and not is_log:
+                if abs(lim[1] - lim[0]) / step > MAX_TICKS:
+                    self.statusMessage.emit(f"{name.upper()} major step {step:g} is too small for "
+                                            "this range; using automatic ticks.")
+                else:
+                    axis.set_major_locator(MultipleLocator(step))
+            minor = self.minor_ticks[name].currentText()
+            if minor == "Off":
+                axis.set_minor_locator(NullLocator())
+            elif is_log:
+                axis.set_minor_locator(LogLocator(subs="auto"))
+            else:
+                axis.set_minor_locator(AutoMinorLocator(None if minor == "Auto" else int(minor)))
+
+        mirror = self.mirror_ticks.isChecked()
+        ax.tick_params(which="both", direction=TICK_DIRECTIONS[self.tick_direction.currentText()],
+                       top=mirror, right=mirror)
+        ax.tick_params(which="major", length=5)
+        ax.tick_params(which="minor", length=2.5)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(mirror)
+            ax.spines[side].set_color(ax.spines["left"].get_edgecolor())
+        if self.grid_check.isChecked() and self.minor_grid.isChecked():
+            ax.grid(True, which="minor", color=t.border, alpha=0.35 if t.dark else 0.18, linewidth=0.6)
 
     def _build_marks_group(self) -> QGroupBox:
         box = QGroupBox("Marks")
@@ -779,6 +851,7 @@ class PlotTab(QWidget):
             ax.relim(visible_only=True)
             ax.autoscale(True)
             ax.autoscale_view()
+        self._apply_ticks(ax, t, fs)
 
         # ax.clear() drops axes callbacks, so reconnect every time.
         ax.callbacks.connect("xlim_changed", lambda _: self._sync_range_fields())

@@ -191,3 +191,25 @@ def test_export_with_preset_font(window, tmp_path):
                 tab.export_style, font)
     assert path.exists()
     assert tab.ax.xaxis.label.get_fontsize() == tab.font_size.value()
+
+
+def test_major_and_minor_ticks(window):
+    from matplotlib.ticker import AutoMinorLocator, MultipleLocator, NullLocator
+
+    tab = window.current_tab()
+    tab.major_step["x"].setText("100")
+    tab.major_step["x"].editingFinished.emit()
+    tab.minor_ticks["x"].setCurrentText("4")
+    tab.minor_ticks["y"].setCurrentText("Off")
+    tab.mirror_ticks.setChecked(True)
+    tab.tick_direction.setCurrentText("Inside")
+    assert isinstance(tab.ax.xaxis.get_major_locator(), MultipleLocator)
+    assert list(tab.ax.get_xticks()[:3]) == [-100, 0, 100]
+    assert isinstance(tab.ax.xaxis.get_minor_locator(), AutoMinorLocator)
+    assert isinstance(tab.ax.yaxis.get_minor_locator(), NullLocator)
+    assert tab.ax.spines["top"].get_visible()
+
+    # A step that would create thousands of ticks falls back to automatic.
+    tab.major_step["x"].setText("0.001")
+    tab.major_step["x"].editingFinished.emit()
+    assert not isinstance(tab.ax.xaxis.get_major_locator(), MultipleLocator)
