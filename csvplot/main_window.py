@@ -26,11 +26,17 @@ from .loaders import file_dialog_filter, load_file
 from .plot_tab import PlotTab
 
 APP_NAME = "CSV Plotter"
-ICON_PATH = Path(__file__).resolve().parent / "resources" / "icon.svg"
+RESOURCES = Path(__file__).resolve().parent / "resources"
+
+
+def icon_path() -> Path:
+    """The icon drawn in the current theme's colours (see tools/make_icon.py)."""
+    path = RESOURCES / f"icon-{theme.current.name.lower()}.svg"
+    return path if path.exists() else RESOURCES / "icon.svg"
 
 
 def app_icon() -> QIcon:
-    return QIcon(str(ICON_PATH))
+    return QIcon(str(icon_path()))
 
 MOUSE_HELP = """
 <h3>Mouse &amp; keyboard</h3>
@@ -291,6 +297,8 @@ class MainWindow(QMainWindow):
     def set_theme(self, name: str) -> None:
         old = theme.current
         new = theme.apply_theme(QApplication.instance(), name)
+        QApplication.instance().setWindowIcon(app_icon())
+        self.setWindowIcon(app_icon())
         self.settings.setValue("theme", name)
         self._refresh_empty_label()
         self._style_session_edit()
@@ -300,7 +308,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_empty_label(self) -> None:
         self.empty_label.setText(
-            f"<img src='{ICON_PATH.as_posix()}' width='96' height='96'>"
+            f"<img src='{icon_path().as_posix()}' width='96' height='96'>"
             f"<h2 style='color:{theme.current.accent}'>No file open</h2>"
             "<p>Use <b>Open</b> (Ctrl+O) or drop files here.</p>"
         )

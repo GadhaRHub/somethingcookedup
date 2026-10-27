@@ -1,5 +1,6 @@
 """Generate csvplot/resources/icon.svg: two bipolar echo pulses.
 
+One version is generated per app theme.
 The small echo runs horizontally across the top. The big echo is rotated 90°:
 it runs vertically downward from the small echo's midpoint, where that pulse
 crosses zero. Each pulse is a derivative of a Gaussian.
@@ -11,8 +12,13 @@ from pathlib import Path
 import numpy as np
 
 SIZE = 256
-BG, BIG, SMALL = "#4F0336", "#CC088A", "#D9C0FA"
-BLEND = "#D964C2"  # where the two echoes meet
+# One colour set per app theme: background (top-left, bottom-right), big echo,
+# small echo, and the blend where the two echoes meet.
+THEMES = {
+    "berry": dict(bg_top="#6A0848", bg="#4F0336", big="#CC088A", small="#D9C0FA", blend="#D964C2"),
+    "forest": dict(bg_top="#237A5E", bg="#186049", big="#D98327", small="#ECE8AF", blend="#E3B66B"),
+    "night": dict(bg_top="#3A1230", bg="#17131A", big="#E0249C", small="#B794F6", blend="#CC5CC9"),
+}
 SMALL_W, BIG_W = 11, 14
 
 
@@ -43,7 +49,7 @@ def smoothstep(a, b, x):
     return u * u * (3 - 2 * u)
 
 
-def main():
+def make_svg(bg_top, bg, big, small, blend):
     t = np.linspace(0, 1, 600)
     cx, top = SIZE * 0.5, SIZE * 0.31
 
@@ -61,31 +67,38 @@ def main():
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SIZE} {SIZE}" width="{SIZE}" height="{SIZE}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6A0848"/>
-      <stop offset="1" stop-color="{BG}"/>
+      <stop offset="0" stop-color="{bg_top}"/>
+      <stop offset="1" stop-color="{bg}"/>
     </linearGradient>
     <!-- Both strokes share the BLEND colour at the junction, so they merge. -->
     <radialGradient id="small" gradientUnits="userSpaceOnUse" cx="{cx}" cy="{top}" r="{blend_r:.1f}">
-      <stop offset="0.15" stop-color="{BLEND}"/>
-      <stop offset="1" stop-color="{SMALL}"/>
+      <stop offset="0.15" stop-color="{blend}"/>
+      <stop offset="1" stop-color="{small}"/>
     </radialGradient>
     <linearGradient id="big" gradientUnits="userSpaceOnUse" x1="0" y1="{top}" x2="0" y2="{top + blend_r * 1.6:.1f}">
-      <stop offset="0.2" stop-color="{BLEND}"/>
-      <stop offset="1" stop-color="{BIG}"/>
+      <stop offset="0.2" stop-color="{blend}"/>
+      <stop offset="1" stop-color="{big}"/>
     </linearGradient>
   </defs>
   <rect x="8" y="8" width="{SIZE - 16}" height="{SIZE - 16}" rx="56" fill="url(#bg)"/>
   <!-- The big echo sits behind the small one and grows out of it: same width
        and colour at the junction. -->
   <path d="{ribbon(vx, vy, vw)}" fill="url(#big)"/>
-  <circle cx="{vx[-1]:.1f}" cy="{vy[-1]:.1f}" r="{BIG_W / 2}" fill="{BIG}"/>
+  <circle cx="{vx[-1]:.1f}" cy="{vy[-1]:.1f}" r="{BIG_W / 2}" fill="{big}"/>
   <path d="{polyline(hx, hy)}" fill="none" stroke="url(#small)" stroke-width="{SMALL_W}"
         stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 '''
-    out = Path(__file__).resolve().parent.parent / "csvplot" / "resources" / "icon.svg"
-    out.write_text(svg)
-    print(f"wrote {out}")
+    return svg
+
+
+def main():
+    folder = Path(__file__).resolve().parent.parent / "csvplot" / "resources"
+    for name, colors in THEMES.items():
+        # The Berry version is also the default icon.svg.
+        for filename in (["icon.svg"] if name == "berry" else []) + [f"icon-{name}.svg"]:
+            (folder / filename).write_text(make_svg(**colors))
+            print(f"wrote {folder / filename}")
 
 
 if __name__ == "__main__":

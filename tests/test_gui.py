@@ -274,3 +274,15 @@ def test_plain_and_grid_background(window, tmp_path):
     save_figure(tab.figure, str(tmp_path / "g.png"), (4, 3), 100, "White", spy, grid=True)
     assert seen == [True]
     assert tab.plot_background.currentText() == "Plain" and not gridlines_visible()
+
+
+def test_icon_follows_theme(window):
+    from csvplot.main_window import icon_path
+
+    assert icon_path().name == "icon-berry.svg"
+    window.set_theme("Forest")
+    try:
+        assert icon_path().name == "icon-forest.svg"
+        assert "icon-forest.svg" in window.empty_label.text()
+    finally:
+        window.set_theme("Berry")

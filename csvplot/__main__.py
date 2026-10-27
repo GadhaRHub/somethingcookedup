@@ -12,8 +12,8 @@ from .theme import DEFAULT_THEME, apply_theme
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setWindowIcon(app_icon())
     apply_theme(app, QSettings("csvplot", "csvplot").value("theme", DEFAULT_THEME))
+    app.setWindowIcon(app_icon())
     window = MainWindow()
     window.show()
     window.setFocus()  # don't start with the cursor in the session-name box
