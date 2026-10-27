@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -208,7 +209,10 @@ class PlotTab(QWidget):
             save_action.triggered.connect(self.save_figure)
             save_action.setToolTip("Export figure (PNG, SVG, PDF, …)")
 
-        self.toolbar.addSeparator()
+        # Second toolbar row: marking tools and the data table, so they stay
+        # visible even when the plot is narrow (e.g. table beside the plot).
+        self.tools_bar = QToolBar()
+        self.tools_bar.setObjectName("plot_tools")
         self.act_mark_point = QAction("Mark point", self, checkable=True)
         self.act_mark_point.setToolTip(
             "Click on the plot to mark a point (snaps to the nearest data point).\n"
@@ -216,13 +220,13 @@ class PlotTab(QWidget):
         )
         self.act_mark_region = QAction("Mark region", self, checkable=True)
         self.act_mark_region.setToolTip("Drag horizontally on the plot to shade an x-range.")
-        self.toolbar.addAction(self.act_mark_point)
-        self.toolbar.addAction(self.act_mark_region)
-        self.toolbar.addSeparator()
+        self.tools_bar.addAction(self.act_mark_point)
+        self.tools_bar.addAction(self.act_mark_region)
+        self.tools_bar.addSeparator()
         self.act_data = QAction("Data table", self, checkable=True)
-        self.act_data.setToolTip("Show the raw values in a tab next to the plot")
+        self.act_data.setToolTip("Show the raw values next to the plot (Ctrl+T)")
         self.act_data.toggled.connect(lambda on: self.show_data_preview() if on else self.close_data_preview())
-        self.toolbar.addAction(self.act_data)
+        self.tools_bar.addAction(self.act_data)
         self.apply_toolbar_icons()
         self.act_mark_point.toggled.connect(lambda on: self._set_mark_mode("point", on))
         self.act_mark_region.toggled.connect(lambda on: self._set_mark_mode("region", on))
@@ -241,6 +245,7 @@ class PlotTab(QWidget):
         pl.setContentsMargins(12, 10, 12, 12)
         pl.setSpacing(6)
         pl.addWidget(self.toolbar)
+        pl.addWidget(self.tools_bar)
         pl.addWidget(self.canvas, 1)
         pl.addWidget(self.coord_label)
 
