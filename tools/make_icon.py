@@ -12,6 +12,7 @@ import numpy as np
 
 SIZE = 256
 BG, BIG, SMALL = "#4F0336", "#CC088A", "#D9C0FA"
+BLEND = "#D964C2"  # where the two echoes meet
 
 
 def bipolar(u):
@@ -42,11 +43,20 @@ def main():
       <stop offset="0" stop-color="#6A0848"/>
       <stop offset="1" stop-color="{BG}"/>
     </linearGradient>
+    <!-- Both strokes share the BLEND colour at the junction, so they merge. -->
+    <radialGradient id="small" gradientUnits="userSpaceOnUse" cx="{cx}" cy="{top}" r="{SIZE * 0.2:.1f}">
+      <stop offset="0" stop-color="{BLEND}"/>
+      <stop offset="1" stop-color="{SMALL}"/>
+    </radialGradient>
+    <linearGradient id="big" gradientUnits="userSpaceOnUse" x1="0" y1="{top}" x2="0" y2="{top + SIZE * 0.22:.1f}">
+      <stop offset="0" stop-color="{BLEND}"/>
+      <stop offset="1" stop-color="{BIG}"/>
+    </linearGradient>
   </defs>
   <rect x="8" y="8" width="{SIZE - 16}" height="{SIZE - 16}" rx="56" fill="url(#bg)"/>
-  <path d="{polyline(vx, vy)}" fill="none" stroke="{BIG}" stroke-width="13"
+  <path d="{polyline(vx, vy)}" fill="none" stroke="url(#big)" stroke-width="13"
         stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="{polyline(hx, hy)}" fill="none" stroke="{SMALL}" stroke-width="10"
+  <path d="{polyline(hx, hy)}" fill="none" stroke="url(#small)" stroke-width="11"
         stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 '''
