@@ -305,7 +305,7 @@ class PlotTab(QWidget):
 
         hint = QLabel("Tip: click a legend entry to hide or show that line.")
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {theme.current.muted};")
+        hint.setObjectName("hint")
         form.addRow(hint)
         return box
 

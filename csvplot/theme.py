@@ -309,6 +309,7 @@ def stylesheet(t: Theme | None = None) -> str:
         font-family: monospace; color: {t.text};
     }}
 
+    QLabel#hint {{ color: {t.muted}; }}
     QStatusBar {{ background: {t.bg}; color: {t.text}; }}
     QToolTip {{ background: {t.bar}; color: {t.bar_text}; border: none; padding: 5px 8px; }}
     """
