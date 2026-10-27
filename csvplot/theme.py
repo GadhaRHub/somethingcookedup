@@ -155,6 +155,13 @@ def stylesheet(t: Theme | None = None) -> str:
     }}
     QToolBar#main_toolbar QToolButton:hover {{ background: {t.accent}; color: white; }}
     QToolBar#main_toolbar QToolButton:pressed {{ background: {t.accent_hover}; }}
+    QLabel#session_caption {{ color: {_rgba(t.bar_text, 0.7)}; font-weight: 600; padding-right: 6px; }}
+    QToolBar#main_toolbar QLineEdit#session_name {{
+        background: {_rgba(t.soft, 0.16)}; color: {t.bar_text}; border: 1px solid transparent;
+        border-radius: 12px; padding: 6px 12px; font-weight: 600;
+        selection-background-color: {t.accent};
+    }}
+    QToolBar#main_toolbar QLineEdit#session_name:focus {{ border: 1px solid {t.accent}; }}
     QToolBar#main_toolbar QToolButton:disabled {{ color: {_rgba(t.bar_text, 0.4)}; background: {_rgba(t.soft, 0.06)}; }}
 
     QTabWidget::pane {{ border: none; }}

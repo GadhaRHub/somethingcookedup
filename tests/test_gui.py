@@ -135,3 +135,16 @@ def test_legend_click_toggles_line(window):
     handle = next(a for a, s in tab._legend_map.items() if s is target)
     tab._on_pick(SimpleNamespace(artist=handle, mouseevent=SimpleNamespace(button=1)))
     assert target.visible
+
+
+def test_session_and_tab_names(window, monkeypatch):
+    window.set_session_name("Ti film pump-probe")
+    assert window.windowTitle() == "Ti film pump-probe — CSV Plotter"
+    window.set_session_name("")
+    assert window.windowTitle() == "CSV Plotter"
+
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText", lambda *a, **k: ("10 nm sample", True))
+    window.rename_tab(0)
+    assert window.tabs.tabText(0) == "10 nm sample"
+    assert window.current_tab().display_name == "10 nm sample"
+    assert not window.windowIcon().isNull()

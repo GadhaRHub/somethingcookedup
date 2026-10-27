@@ -5,13 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QInputDialog,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QSizePolicy,
     QStackedWidget,
     QTabWidget,
     QVBoxLayout,
@@ -23,6 +26,11 @@ from .loaders import file_dialog_filter, load_file
 from .plot_tab import PlotTab
 
 APP_NAME = "CSV Plotter"
+ICON_PATH = Path(__file__).resolve().parent / "resources" / "icon.svg"
+
+
+def app_icon() -> QIcon:
+    return QIcon(str(ICON_PATH))
 
 MOUSE_HELP = """
 <h3>Mouse &amp; keyboard</h3>
@@ -47,9 +55,12 @@ class DetachedWindow(QMainWindow):
         super().__init__(main, Qt.Window)
         self.tab = tab
         self.main = main
-        self.setWindowTitle(f"{tab.title} — {APP_NAME}")
         self.setCentralWidget(tab)
         self.resize(1200, 750)
+        self.update_title()
+
+    def update_title(self) -> None:
+        self.setWindowTitle(f"{self.tab.display_name} — {self.main.windowTitle()}")
 
     def closeEvent(self, event) -> None:
         tab = self.takeCentralWidget()
@@ -63,6 +74,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(app_icon())
         self.resize(1300, 820)
         self.setAcceptDrops(True)
         self.settings = QSettings("csvplot", "csvplot")
@@ -73,6 +85,8 @@ class MainWindow(QMainWindow):
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
+        self.tabs.tabBarDoubleClicked.connect(self.rename_tab)
+        self.tabs.tabBar().setToolTip("Double-click to rename")
         self.tabs.currentChanged.connect(self._update_actions)
 
         self.empty_label = empty = QLabel()
@@ -111,6 +125,10 @@ class MainWindow(QMainWindow):
         self.act_close = action("&Close tab", lambda: self.close_tab(self.tabs.currentIndex()),
                                 QKeySequence.Close)
         self.act_quit = action("&Quit", self.close, QKeySequence.Quit)
+        self.act_session = action("Name &session…", self.edit_session_name, "F2",
+                                  "Name this session; the name appears in the window title")
+        self.act_rename_tab = action("&Rename plot…", lambda: self.rename_tab(self.tabs.currentIndex()),
+                                     "Ctrl+R", "Rename the current plot tab")
         self.act_detach = action("&Detach plot to window", self.detach_current, "Ctrl+D",
                                  "Move the current plot into its own movable window")
         self.act_controls = action("Show/hide &controls panel", self.toggle_controls, "Ctrl+B")
@@ -118,8 +136,8 @@ class MainWindow(QMainWindow):
         self.act_about = action("&About", self.show_about)
 
         file_menu = self.menuBar().addMenu("&File")
-        for act in (self.act_open, self.act_add, None, self.act_save, None,
-                    self.act_close, None, self.act_quit):
+        for act in (self.act_open, self.act_add, None, self.act_session, self.act_rename_tab, None,
+                    self.act_save, None, self.act_close, None, self.act_quit):
             file_menu.addSeparator() if act is None else file_menu.addAction(act)
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.act_detach)
@@ -143,9 +161,35 @@ class MainWindow(QMainWindow):
         for act in (self.act_open, self.act_add, self.act_save, self.act_detach):
             toolbar.addAction(act)
 
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+        caption = QLabel("Session")
+        caption.setObjectName("session_caption")
+        toolbar.addWidget(caption)
+        self.session_edit = QLineEdit()
+        self.session_edit.setObjectName("session_name")
+        self.session_edit.setPlaceholderText("Untitled session")
+        self.session_edit.setToolTip("Name this session (F2). It is shown in the window title.")
+        self.session_edit.setFixedWidth(240)
+        self.session_edit.setClearButtonEnabled(True)
+        self.session_edit.textChanged.connect(self._update_title)
+        self.session_edit.returnPressed.connect(lambda: self.tabs.setFocus())
+        toolbar.addWidget(self.session_edit)
+        self._style_session_edit()
+
+    def _style_session_edit(self) -> None:
+        # Placeholder colour can't be set from a stylesheet.
+        palette = self.session_edit.palette()
+        color = QColor(theme.current.bar_text)
+        color.setAlphaF(0.55)
+        palette.setColor(QPalette.PlaceholderText, color)
+        self.session_edit.setPalette(palette)
+
     def _update_actions(self, *_):
         has_tab = self.tabs.count() > 0
-        for act in (self.act_add, self.act_save, self.act_close, self.act_detach, self.act_controls):
+        for act in (self.act_add, self.act_save, self.act_close, self.act_detach, self.act_controls,
+                    self.act_rename_tab):
             act.setEnabled(has_tab)
         self.stack.setCurrentIndex(1 if has_tab else 0)
 
@@ -171,7 +215,7 @@ class MainWindow(QMainWindow):
             dataset = self._load(path)
             if dataset is not None:
                 tab.add_dataset(dataset)
-        self.tabs.setTabText(self.tabs.currentIndex(), tab.title)
+        self.tabs.setTabText(self.tabs.currentIndex(), tab.display_name)
 
     def _load(self, path):
         try:
@@ -187,7 +231,7 @@ class MainWindow(QMainWindow):
                 continue
             tab = PlotTab(dataset)
             tab.statusMessage.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
-            index = self.tabs.addTab(tab, tab.title)
+            index = self.tabs.addTab(tab, tab.display_name)
             self.tabs.setTabToolTip(index, str(dataset.path))
             self.tabs.setCurrentIndex(index)
             rows, cols = dataset.frame.shape
@@ -219,7 +263,7 @@ class MainWindow(QMainWindow):
         self._update_actions()
 
     def attach_tab(self, tab: PlotTab) -> None:
-        index = self.tabs.addTab(tab, tab.title)
+        index = self.tabs.addTab(tab, tab.display_name)
         self.tabs.setTabToolTip(index, "\n".join(str(d.path) for d in tab.datasets))
         self.tabs.setCurrentIndex(index)
         self._update_actions()
@@ -233,22 +277,55 @@ class MainWindow(QMainWindow):
         new = theme.apply_theme(QApplication.instance(), name)
         self.settings.setValue("theme", name)
         self._refresh_empty_label()
+        self._style_session_edit()
         tabs = [self.tabs.widget(i) for i in range(self.tabs.count())]
         for tab in tabs + [w.tab for w in self.detached]:
             tab.change_theme(old, new)
 
     def _refresh_empty_label(self) -> None:
         self.empty_label.setText(
+            f"<img src='{ICON_PATH.as_posix()}' width='96' height='96'>"
             f"<h2 style='color:{theme.current.accent}'>No file open</h2>"
             "<p>Use <b>Open</b> (Ctrl+O) or drop files here.</p>"
         )
+
+    # ------------------------------------------------------------- naming
+    @property
+    def session_name(self) -> str:
+        return self.session_edit.text().strip()
+
+    def set_session_name(self, name: str) -> None:
+        self.session_edit.setText(name)
+
+    def edit_session_name(self) -> None:
+        self.session_edit.setFocus()
+        self.session_edit.selectAll()
+
+    def _update_title(self, *_) -> None:
+        name = self.session_name
+        self.setWindowTitle(f"{name} — {APP_NAME}" if name else APP_NAME)
+        for window in self.detached:
+            window.update_title()
+
+    def rename_tab(self, index: int) -> None:
+        tab = self.tabs.widget(index)
+        if tab is None:
+            return
+        name, ok = QInputDialog.getText(self, "Rename plot", "Plot name (empty for the file name):",
+                                        QLineEdit.Normal, tab.custom_name or tab.title)
+        if ok:
+            tab.custom_name = "" if name.strip() == tab.title else name.strip()
+            self.tabs.setTabText(index, tab.display_name)
 
     def show_help(self) -> None:
         QMessageBox.information(self, "Mouse controls", MOUSE_HELP)
 
     def show_about(self) -> None:
-        QMessageBox.about(self, f"About {APP_NAME}",
-                          f"<b>{APP_NAME}</b> {__version__}<br>Interactive viewer for CSV data files.")
+        box = QMessageBox(self)
+        box.setWindowTitle(f"About {APP_NAME}")
+        box.setIconPixmap(app_icon().pixmap(96, 96))
+        box.setText(f"<h3>{APP_NAME} {__version__}</h3>Interactive viewer for CSV data files.")
+        box.exec()
 
     # ------------------------------------------------------- drag & drop
     def dragEnterEvent(self, event) -> None:

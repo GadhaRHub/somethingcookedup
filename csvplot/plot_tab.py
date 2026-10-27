@@ -152,6 +152,7 @@ class PlotTab(QWidget):
     def __init__(self, dataset: Dataset, parent=None):
         super().__init__(parent)
         self.datasets: list[Dataset] = []
+        self.custom_name = ""
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -454,6 +455,11 @@ class PlotTab(QWidget):
         self._refresh_x_combo(x_default)
         self._refresh_series_table()
         self.redraw(keep_view=False)
+
+    @property
+    def display_name(self) -> str:
+        """Name shown on the tab: the user's name for the plot, else the file names."""
+        return self.custom_name or self.title
 
     @property
     def title(self) -> str:
@@ -968,7 +974,7 @@ class PlotTab(QWidget):
         self._after_marks_changed()  # refresh the marks list and redraw
 
     def save_figure(self) -> str | None:
-        name = "_".join(d.path.stem for d in self.datasets)
+        name = self.custom_name or "_".join(d.path.stem for d in self.datasets)
         path = export_figure(self.figure, name, self)
         if path:
             self.statusMessage.emit(f"Saved {path}")
