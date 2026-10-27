@@ -441,6 +441,49 @@ class FFTDialog(QDialog):
         hi = settings.f_max if settings.f_max is not None else hi
         return lo, max(hi, lo * 1.01 + 1e-12)
 
+    # -------------------------------------------------------------- session
+    def _state_widgets(self) -> list:
+        # Order matters: choosing a window resets its parameter, so the
+        # parameter comes after it.
+        return [("lines", self.series_combo), ("range", self.range_combo),
+                ("method", self.method), ("window", self.window),
+                ("window_param", self.window_param), ("window_length", self.segment),
+                ("overlap", self.overlap), ("detrend", self.detrend), ("zero_padding", self.zero_pad),
+                ("peaks", self.n_peaks), ("min_height", self.min_height),
+                ("f_min", self.f_min), ("f_max", self.f_max), ("x_axis", self.axis_mode),
+                ("log_amplitude", self.log_amp), ("show_data", self.show_data)]
+
+    def get_state(self) -> dict:
+        state = {"open": self.isVisible()}
+        for name, widget in self._state_widgets():
+            if isinstance(widget, QComboBox):
+                state[name] = widget.currentText()
+            elif isinstance(widget, QLineEdit):
+                state[name] = widget.text()
+            elif isinstance(widget, QCheckBox):
+                state[name] = widget.isChecked()
+            else:
+                state[name] = widget.value()
+        return state
+
+    def apply_state(self, state: dict) -> None:
+        self.refresh_choices()   # the plot's lines and regions may have changed
+        for name, widget in self._state_widgets():
+            if name not in state:
+                continue
+            value = state[name]
+            if isinstance(widget, QComboBox):
+                if widget.findText(value) >= 0:   # e.g. a region that no longer exists
+                    widget.setCurrentText(value)
+            elif isinstance(widget, QLineEdit):
+                widget.setText(value)
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(bool(value))
+            else:
+                widget.setValue(value)
+        self._timer.stop()
+        self.run()
+
     # --------------------------------------------------------------- export
     def _rc(self) -> dict:
         rc = theme.mpl_rc(self._export_theme or theme.current)

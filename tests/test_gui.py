@@ -579,3 +579,52 @@ def test_session_uses_saved_copy_when_file_is_missing(window, tmp_path, monkeypa
     window.open_session(path)
     assert window.tabs.count() == 1 and len(window.current_tab().datasets[0].frame) == 12021
     assert "not found" in notes[0]
+
+
+def test_session_keeps_fft_settings(window, tmp_path, monkeypatch):
+    from csvplot.plot_tab import RegionMark
+    from csvplot.session import save_session
+
+    tab = window.current_tab()
+    tab.region_marks.append(RegionMark(1, 100, "#CC088A"))
+    tab._after_marks_changed()
+    tab.open_fft()
+    d = tab.fft_dialog
+    d.refresh_choices()
+    d.series_combo.setCurrentText("dR_over_R_minus_bg")
+    d.range_combo.setCurrentText("Region 1 → 100")
+    d.method.setCurrentText("Welch (averaged sliding windows)")
+    d.window.setCurrentText("Kaiser")
+    d.window_param.setValue(12.5)
+    d.segment.setValue(30)
+    d.overlap.setValue(80)
+    d.zero_pad.setCurrentText("8×")
+    d.n_peaks.setValue(3)
+    d.f_max.setText("0.5")
+    d.axis_mode.setCurrentText("Period")
+    d.log_amp.setChecked(True)
+    expected = d.get_state()
+    path = tmp_path / "s.csvplot"
+    save_session(window, path)
+
+    window.close_all()
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *a, **k: None)
+    window.open_session(path)
+    tab = window.current_tab()
+    d = tab.fft_dialog                       # it was open, so it reopens
+    restored = d.get_state()
+    assert {k: v for k, v in restored.items() if k != "open"} == \
+        {k: v for k, v in expected.items() if k != "open"}
+    assert d.results and d.results[0].label == "dR_over_R_minus_bg"
+    assert d.results[0].x[0] >= 1 and d.results[0].x[-1] <= 100
+    assert len(d.results[0].peaks) <= 3
+
+    # Closed analysis windows keep their settings too.
+    d.close()
+    save_session(window, path)
+    window.close_all()
+    window.open_session(path)
+    tab = window.current_tab()
+    assert getattr(tab, "fft_dialog", None) is None and tab._fft_state["window"] == "Kaiser"
+    tab.open_fft()
+    assert tab.fft_dialog.window_param.value() == 12.5

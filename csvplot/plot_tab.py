@@ -229,6 +229,7 @@ class PlotTab(QWidget):
         self._legend_drawn_loc = None
         self._math_errors: list[str] = []
         self._loading = False   # restoring a session: skip intermediate redraws
+        self._fft_state: dict | None = None   # analysis settings waiting for the window
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -1605,6 +1606,9 @@ class PlotTab(QWidget):
 
         if getattr(self, "fft_dialog", None) is None:
             self.fft_dialog = FFTDialog(self)
+            if self._fft_state:   # settings restored from a session
+                self.fft_dialog.apply_state(self._fft_state)
+                self._fft_state = None
         else:
             self.fft_dialog.refresh_choices()
         self.fft_dialog.show()
@@ -1697,6 +1701,8 @@ class PlotTab(QWidget):
             },
             "data_table": None if self.data_preview is None else (
                 "below" if self.views.orientation() == Qt.Vertical else "beside"),
+            "analysis": (self.fft_dialog.get_state() if getattr(self, "fft_dialog", None)
+                         else self._fft_state),
         }
 
     def apply_state(self, state: dict) -> None:
@@ -1757,6 +1763,12 @@ class PlotTab(QWidget):
             self.show_data_preview(focus=False)
             if state["data_table"] == "beside":
                 self.toggle_data_layout()
+        if state.get("analysis"):
+            # Kept until the analysis window is opened, so closed windows keep
+            # their settings too.
+            self._fft_state = dict(state["analysis"])
+            if self._fft_state.get("open"):
+                self.open_fft()
 
     def save_figure(self) -> str | None:
         name = self.custom_name or "_".join(d.path.stem for d in self.datasets)

@@ -23,7 +23,11 @@ You can also drag files onto the window.
   (Ctrl+Shift+S) writes a `.csvplot` file. It stores every plot (including detached
   ones and spectra made in the app) with its line styles, offsets, labels, ticks,
   legend (including a dragged position), marks, text/equations, zoom and data-table
-  layout, plus the session name and theme. *File → Open session…* (Ctrl+Shift+E), or
+  layout, plus the session name and theme. Each plot's analysis-window settings
+  (lines, range, method, window and parameter, window length, overlap, detrend, zero
+  padding, peak search, display) are saved too. A window that was open reopens with
+  the results recomputed; a closed one keeps its settings for the next time you open
+  it. *File → Open session…* (Ctrl+Shift+E), or
   opening/dropping a `.csvplot` file, restores it; you choose whether to replace or
   add to the plots already open. Data files are re-read from disk; if one has moved,
   the copy saved in the session is used and you're told.
