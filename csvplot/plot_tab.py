@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
+from .export import export_figure
 from .loaders import Dataset
 
 ROW_INDEX = "(row index)"
@@ -51,7 +53,9 @@ COLORMAPS = [
     "tab10", "tab20", "Set1", "Dark2", "Paired",
 ]
 
-PLOT_STYLES = ["Line", "Markers", "Line + markers"]
+LINE_STYLES = {"Solid": "-", "Dashed": "--", "Dotted": ":", "Dash-dot": "-.", "None": "None"}
+MARKERS = {"None": "", "Circle": "o", "Square": "s", "Triangle": "^", "Diamond": "D",
+           "Cross": "x", "Plus": "+", "Point": "."}
 
 LEGEND_LOCATIONS = [
     "best", "upper right", "upper left", "lower left", "lower right",
@@ -67,6 +71,12 @@ class Series:
     column: str
     color: str
     visible: bool = True
+    label: str = ""          # custom legend name; empty means automatic
+    width: float = 1.5
+    linestyle: str = "-"
+    marker: str = ""
+    markersize: float = 4.0
+    alpha: float = 1.0
 
 
 @dataclass
@@ -162,6 +172,13 @@ class PlotTab(QWidget):
         self.ax = self.figure.add_subplot()
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
 
+        # The toolbar's save button opens our high-quality export dialog.
+        save_action = self.toolbar._actions.get("save_figure")
+        if save_action is not None:
+            save_action.triggered.disconnect()
+            save_action.triggered.connect(self.save_figure)
+            save_action.setToolTip("Export figure (PNG, SVG, PDF, …)")
+
         self.toolbar.addSeparator()
         self.act_mark_point = QAction("Mark point", self, checkable=True)
         self.act_mark_point.setToolTip(
@@ -198,6 +215,7 @@ class PlotTab(QWidget):
         panel_layout.setContentsMargins(2, 0, 6, 0)
         panel_layout.setSpacing(10)
         panel_layout.addWidget(self._build_data_group())
+        panel_layout.addWidget(self._build_series_style_group())
         panel_layout.addWidget(self._build_color_group())
         panel_layout.addWidget(self._build_label_group())
         panel_layout.addWidget(self._build_axes_group())
@@ -224,6 +242,7 @@ class PlotTab(QWidget):
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
         self.canvas.mpl_connect("button_press_event", self._on_press)
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
+        self.canvas.mpl_connect("pick_event", self._on_pick)
         self.canvas.mpl_connect("axes_leave_event", lambda e: self.coord_label.setText(""))
 
     def _build_data_group(self) -> QGroupBox:
@@ -231,33 +250,67 @@ class PlotTab(QWidget):
         form = QFormLayout(box)
 
         self.x_combo = QComboBox()
-        self.x_combo.currentTextChanged.connect(lambda _: self.redraw(keep_view=False))
+        self.x_combo.currentTextChanged.connect(self._on_x_changed)
         form.addRow("X axis", self.x_combo)
 
-        self.series_table = QTableWidget(0, 2)
-        self.series_table.setHorizontalHeaderLabels(["Y series", "Colour"])
+        self.series_table = QTableWidget(0, 3)
+        self.series_table.setHorizontalHeaderLabels(["Y series", "Colour", "Width"])
+        self.series_table.setToolTip("Tick to show, untick to hide. Select a row to edit its style below.")
         self.series_table.verticalHeader().hide()
         self.series_table.setShowGrid(False)
         self.series_table.setFocusPolicy(Qt.NoFocus)
         self.series_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.series_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.series_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.series_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.series_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.series_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.series_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.series_table.itemChanged.connect(self._on_series_toggled)
+        self.series_table.currentCellChanged.connect(lambda row, *_: self._load_series_editor(row))
         form.addRow(self.series_table)
 
-        self.style_combo = QComboBox()
-        self.style_combo.addItems(PLOT_STYLES)
-        self.style_combo.currentIndexChanged.connect(lambda _: self.redraw())
-        form.addRow("Style", self.style_combo)
+        hint = QLabel("Tip: click a legend entry to hide or show that line.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {theme.current.muted};")
+        form.addRow(hint)
+        return box
 
-        self.line_width = QDoubleSpinBox(minimum=0.1, maximum=10, singleStep=0.25, value=1.5)
-        self.line_width.valueChanged.connect(lambda _: self.redraw())
-        form.addRow("Line width", self.line_width)
+    def _build_series_style_group(self) -> QGroupBox:
+        box = QGroupBox("Line style")
+        form = QFormLayout(box)
+        self.style_target = QLabel()
+        self.style_target.setWordWrap(True)
+        form.addRow(self.style_target)
 
-        self.marker_size = QDoubleSpinBox(minimum=0.5, maximum=20, singleStep=0.5, value=3)
-        self.marker_size.valueChanged.connect(lambda _: self.redraw())
-        form.addRow("Marker size", self.marker_size)
+        self.series_name = QLineEdit()
+        self.series_name.setToolTip("Name shown in the legend. Leave empty for the column name.")
+        self.series_name.editingFinished.connect(self._on_series_style_changed)
+        form.addRow("Name", self.series_name)
+
+        self.series_linestyle = QComboBox()
+        self.series_linestyle.addItems(LINE_STYLES)
+        form.addRow("Line", self.series_linestyle)
+
+        self.series_marker = QComboBox()
+        self.series_marker.addItems(MARKERS)
+        form.addRow("Marker", self.series_marker)
+
+        self.series_markersize = QDoubleSpinBox(minimum=0.5, maximum=30, singleStep=0.5)
+        form.addRow("Marker size", self.series_markersize)
+
+        self.series_alpha = QSpinBox(minimum=5, maximum=100, singleStep=5, suffix=" %")
+        form.addRow("Opacity", self.series_alpha)
+
+        for widget in (self.series_linestyle, self.series_marker):
+            widget.currentTextChanged.connect(lambda _: self._on_series_style_changed())
+        for widget in (self.series_markersize, self.series_alpha):
+            widget.valueChanged.connect(lambda _: self._on_series_style_changed())
+
+        apply_all = QPushButton("Apply this style to all lines")
+        apply_all.setProperty("secondary", True)
+        apply_all.setToolTip("Copy width, line, marker and opacity to every series (not colour or name).")
+        apply_all.clicked.connect(self._apply_style_to_all)
+        form.addRow(apply_all)
         return box
 
     def _build_color_group(self) -> QGroupBox:
@@ -423,27 +476,55 @@ class PlotTab(QWidget):
         self.x_combo.setCurrentText(select if select in options else options[min(1, len(options) - 1)])
         self.x_combo.blockSignals(False)
 
-    def _series_label(self, s: Series) -> str:
+    def _default_label(self, s: Series) -> str:
         return s.column if len(self.datasets) == 1 else f"{s.dataset.path.stem}: {s.column}"
+
+    def _series_label(self, s: Series) -> str:
+        return s.label or self._default_label(s)
+
+    def _is_x(self, s: Series) -> bool:
+        """True if the series is the column currently used as its X axis."""
+        return self._x_values(s.dataset)[1] == s.column
+
+    def _plottable(self) -> list[Series]:
+        return [s for s in self.series if not self._is_x(s)]
+
+    def _on_x_changed(self, _text: str) -> None:
+        self._refresh_series_table()
+        self.redraw(keep_view=False)
 
     def _refresh_series_table(self) -> None:
         table = self.series_table
+        current = table.currentRow()
         table.blockSignals(True)
         table.setRowCount(len(self.series))
         for row, s in enumerate(self.series):
+            is_x = self._is_x(s)
             item = QTableWidgetItem(self._series_label(s))
-            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsSelectable
+                          | (Qt.NoItemFlags if is_x else Qt.ItemIsEnabled))
             item.setCheckState(Qt.Checked if s.visible else Qt.Unchecked)
-            item.setToolTip(f"{s.dataset.path}\n{s.column}")
+            item.setToolTip(f"{s.dataset.path}\n{s.column}" + ("\n(used as the X axis)" if is_x else ""))
             table.setItem(row, 0, item)
+
             button = ColorButton(s.color)
             button.colorChanged.connect(lambda c, s=s: self._set_series_color(s, c))
-            holder = QWidget()
-            hl = QHBoxLayout(holder)
-            hl.setContentsMargins(4, 1, 4, 1)
-            hl.addWidget(button)
-            table.setCellWidget(row, 1, holder)
+            width = QDoubleSpinBox(minimum=0.1, maximum=20, singleStep=0.25, decimals=2, value=s.width)
+            width.setToolTip("Line width")
+            width.setFixedWidth(78)
+            width.valueChanged.connect(lambda v, s=s: self._set_series_width(s, v))
+            for col, widget in ((1, button), (2, width)):
+                holder = QWidget()
+                hl = QHBoxLayout(holder)
+                hl.setContentsMargins(4, 1, 4, 1)
+                hl.addWidget(widget)
+                holder.setEnabled(not is_x)
+                table.setCellWidget(row, col, holder)
         table.blockSignals(False)
+        if not 0 <= current < len(self.series) or self._is_x(self.series[current]):
+            current = next((i for i, s in enumerate(self.series) if not self._is_x(s)), -1)
+        table.selectRow(current) if current >= 0 else None
+        self._load_series_editor(current)
         table.resizeRowsToContents()
         rows_height = sum(table.rowHeight(r) for r in range(table.rowCount()))
         table.setFixedHeight(min(260, table.horizontalHeader().height() + rows_height + 12))
@@ -452,12 +533,84 @@ class PlotTab(QWidget):
         return [self.series_table.cellWidget(r, 1).findChild(ColorButton)
                 for r in range(self.series_table.rowCount())]
 
+    def _width_spins(self) -> list[QDoubleSpinBox]:
+        return [self.series_table.cellWidget(r, 2).findChild(QDoubleSpinBox)
+                for r in range(self.series_table.rowCount())]
+
     def _on_series_toggled(self, item: QTableWidgetItem) -> None:
         self.series[item.row()].visible = item.checkState() == Qt.Checked
         self.redraw(keep_view=False)
 
+    def set_series_visible(self, s: Series, visible: bool) -> None:
+        s.visible = visible
+        item = self.series_table.item(self.series.index(s), 0)
+        self.series_table.blockSignals(True)
+        item.setCheckState(Qt.Checked if visible else Qt.Unchecked)
+        self.series_table.blockSignals(False)
+        self.redraw()
+
     def _set_series_color(self, s: Series, color: str) -> None:
         s.color = color
+        self.redraw()
+
+    def _set_series_width(self, s: Series, width: float) -> None:
+        s.width = width
+        self.redraw()
+
+    def _selected_series(self) -> Series | None:
+        row = self.series_table.currentRow()
+        return self.series[row] if 0 <= row < len(self.series) else None
+
+    def _load_series_editor(self, row: int) -> None:
+        s = self.series[row] if 0 <= row < len(self.series) else None
+        widgets = (self.series_name, self.series_linestyle, self.series_marker,
+                   self.series_markersize, self.series_alpha)
+        for w in widgets:
+            w.setEnabled(s is not None)
+            w.blockSignals(True)
+        if s is None:
+            self.style_target.setText("Select a series in the table above.")
+        else:
+            self.style_target.setText(f"Editing <b>{self._series_label(s)}</b>")
+            self.series_name.setText(s.label)
+            self.series_name.setPlaceholderText(self._default_label(s))
+            self.series_linestyle.setCurrentText(
+                next(k for k, v in LINE_STYLES.items() if v == s.linestyle))
+            self.series_marker.setCurrentText(next(k for k, v in MARKERS.items() if v == s.marker))
+            self.series_markersize.setValue(s.markersize)
+            self.series_alpha.setValue(round(s.alpha * 100))
+        for w in widgets:
+            w.blockSignals(False)
+
+    def _on_series_style_changed(self) -> None:
+        s = self._selected_series()
+        if s is None:
+            return
+        s.label = self.series_name.text().strip()
+        s.linestyle = LINE_STYLES[self.series_linestyle.currentText()]
+        s.marker = MARKERS[self.series_marker.currentText()]
+        if s.linestyle == "None" and not s.marker:
+            # Neither line nor marker would draw nothing at all.
+            s.marker = "o"
+            self.series_marker.blockSignals(True)
+            self.series_marker.setCurrentText("Circle")
+            self.series_marker.blockSignals(False)
+        s.markersize = self.series_markersize.value()
+        s.alpha = self.series_alpha.value() / 100
+        self.series_table.item(self.series.index(s), 0).setText(self._series_label(s))
+        self.style_target.setText(f"Editing <b>{self._series_label(s)}</b>")
+        self.redraw()
+
+    def _apply_style_to_all(self) -> None:
+        src = self._selected_series()
+        if src is None:
+            return
+        for s, spin in zip(self.series, self._width_spins()):
+            s.linestyle, s.marker = src.linestyle, src.marker
+            s.markersize, s.alpha, s.width = src.markersize, src.alpha, src.width
+            spin.blockSignals(True)
+            spin.setValue(src.width)
+            spin.blockSignals(False)
         self.redraw()
 
     def _on_cmap_toggled(self, on: bool) -> None:
@@ -466,10 +619,11 @@ class PlotTab(QWidget):
         self.redraw()
 
     # -------------------------------------------------------------- colours
-    def _visible_series_colors(self) -> list[tuple[Series, str]]:
-        visible = [s for s in self.series if s.visible]
+    def _series_colors(self) -> list[tuple[Series, str]]:
+        """Colour of every plottable series (hidden ones too, so hiding never recolours)."""
+        visible = [s for s in self._plottable() if s.visible]
         if not self.use_cmap.isChecked() or not visible:
-            return [(s, s.color) for s in visible]
+            return [(s, s.color) for s in self._plottable()]
         cmap = matplotlib.colormaps[self.cmap_combo.currentText()]
         if self.cmap_reverse.isChecked():
             cmap = cmap.reversed()
@@ -480,7 +634,8 @@ class PlotTab(QWidget):
         else:
             # Stop short of the top end, which is near-white in many maps.
             colors = [cmap(v) for v in (np.linspace(0, 0.85, n) if n > 1 else [0.4])]
-        return [(s, to_hex(c)) for s, c in zip(visible, colors)]
+        by_id = {id(s): to_hex(c) for s, c in zip(visible, colors)}
+        return [(s, by_id.get(id(s), s.color)) for s in self._plottable()]
 
     def _x_values(self, ds: Dataset) -> tuple[np.ndarray, str]:
         col = self.x_column
@@ -509,13 +664,11 @@ class PlotTab(QWidget):
         ax.set_yscale(scales[1])
         self._last_scales = scales
 
-        style = self.style_combo.currentText()
-        linestyle = "None" if style == "Markers" else "-"
-        marker = "o" if "arker" in style else ""
         fs = self.font_size.value()
 
         self._data_lines = []
-        colored = self._visible_series_colors()
+        lines = []
+        colored = self._series_colors()
         use_cmap = self.use_cmap.isChecked()
         color_of = {id(s): c for s, c in colored}
         for button, s in zip(self._color_buttons(), self.series):
@@ -525,13 +678,15 @@ class PlotTab(QWidget):
             x, _ = self._x_values(s.dataset)
             y = s.dataset.frame[s.column].to_numpy(dtype=float)
             (line,) = ax.plot(
-                x, y, color=color, label=self._series_label(s), linestyle=linestyle,
-                linewidth=self.line_width.value(), marker=marker,
-                markersize=self.marker_size.value(),
+                x, y, color=color, label=self._series_label(s), linestyle=s.linestyle,
+                linewidth=s.width, marker=s.marker, markersize=s.markersize, alpha=s.alpha,
             )
-            self._data_lines.append(line)
+            line.set_visible(s.visible)
+            lines.append((s, line))
+            if s.visible:
+                self._data_lines.append(line)
 
-        visible = [s for s, _ in colored]
+        visible = [s for s, _ in colored if s.visible]
         x_names = {self._x_values(s.dataset)[1] for s in visible} or {self.x_column or ""}
         auto_x = " / ".join(sorted(x_names))
         auto_y = visible[0].column if len({s.column for s in visible}) == 1 else ""
@@ -545,9 +700,18 @@ class PlotTab(QWidget):
         ax.tick_params(labelsize=fs - 1)
         if self.grid_check.isChecked():
             ax.grid(True, alpha=0.3)
-        if self.legend_check.isChecked() and self._data_lines:
-            legend = ax.legend(loc=self.legend_loc.currentText(), fontsize=fs - 1)
+        self._legend_map = {}
+        if self.legend_check.isChecked() and lines:
+            # Hidden lines stay in the legend, faded, so a click brings them back.
+            legend = ax.legend([l for _, l in lines], [l.get_label() for _, l in lines],
+                               loc=self.legend_loc.currentText(), fontsize=fs - 1)
             legend.set_draggable(True)
+            for (s, _), handle, text in zip(lines, legend.legend_handles, legend.get_texts()):
+                handle.set_visible(True)
+                for artist in (handle, text):
+                    artist.set_picker(True)
+                    artist.set_alpha(None if s.visible else 0.3)
+                    self._legend_map[artist] = s
 
         self._draw_marks()
 
@@ -757,6 +921,11 @@ class PlotTab(QWidget):
                 text += f"   │  nearest {line.get_label()}: ({x:.6g}, {y:.6g})"
         self.coord_label.setText(text)
 
+    def _on_pick(self, event) -> None:
+        s = getattr(self, "_legend_map", {}).get(event.artist)
+        if s is not None and event.mouseevent.button == 1:
+            self.set_series_visible(s, not s.visible)
+
     def _on_scroll(self, event) -> None:
         """Mouse-wheel zoom around the cursor. Shift: x only, Ctrl: y only."""
         if event.inaxes is not self.ax:
@@ -798,5 +967,9 @@ class PlotTab(QWidget):
             self.cmap_combo.blockSignals(False)
         self._after_marks_changed()  # refresh the marks list and redraw
 
-    def save_figure(self) -> None:
-        self.toolbar.save_figure()
+    def save_figure(self) -> str | None:
+        name = "_".join(d.path.stem for d in self.datasets)
+        path = export_figure(self.figure, name, self)
+        if path:
+            self.statusMessage.emit(f"Saved {path}")
+        return path

@@ -106,8 +106,8 @@ class MainWindow(QMainWindow):
                                "Open one or more files, each in a new tab")
         self.act_add = action("&Add to current plot…", self.add_dialog, "Ctrl+Shift+O",
                               "Overlay another file on the current plot")
-        self.act_save = action("&Save figure…", self.save_figure, QKeySequence.Save,
-                               "Export the current plot as PNG, SVG, PDF…")
+        self.act_save = action("&Export figure…", self.save_figure, QKeySequence.Save,
+                               "Save the current plot as high-resolution PNG, or vector SVG / PDF / EPS")
         self.act_close = action("&Close tab", lambda: self.close_tab(self.tabs.currentIndex()),
                                 QKeySequence.Close)
         self.act_quit = action("&Quit", self.close, QKeySequence.Quit)
@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
             if dataset is None:
                 continue
             tab = PlotTab(dataset)
+            tab.statusMessage.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
             index = self.tabs.addTab(tab, tab.title)
             self.tabs.setTabToolTip(index, str(dataset.path))
             self.tabs.setCurrentIndex(index)

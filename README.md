@@ -33,13 +33,22 @@ You can also drag files onto the window.
 - **Marks**: *Mark point* (click to mark a point; it snaps to the nearest data point
   if snapping is on) and *Mark region* (drag to shade an x-range). Right-click a mark,
   or use the Marks list, to remove it. Mark colours are configurable.
-- **Styling**: choose a colour per series, or colour all series from a **colormap**
-  (viridis, plasma, turbo, coolwarm, tab10, …, can be reversed). Also: line, marker
-  or line+marker style, line width, marker size, title, axis labels, font size,
-  legend on/off and position, and grid.
+- **Per-line styling**: each series has its own colour and line width in the series
+  table. Select a row to set its legend name, line style (solid, dashed, dotted,
+  dash-dot, none), marker, marker size and opacity. *Apply this style to all lines*
+  copies the style to every series.
+- **Hide lines**: untick a series, or click its legend entry to hide or show it.
+  Hidden lines stay in the legend, faded.
+- **Colours**: choose a colour per series, or colour all series from a **colormap**
+  (Berry, Forest, viridis, plasma, turbo, coolwarm, tab10, …, can be reversed).
+  You can also set the title, axis labels, font size, legend on/off and position,
+  and the grid.
 - **Axis ranges**: type the min/max values and Apply, or use Auto-fit. The boxes
   update as you pan and zoom. Log scale for X and/or Y.
-- **Export**: File → Save figure (PNG, SVG, PDF, …).
+- **High-quality export** (File → Export figure, Ctrl+S, or the toolbar's save icon):
+  PNG, TIFF or JPEG at 150–1200 dpi, or vector SVG, PDF or EPS. Set the output size
+  in cm or inches and choose a white, theme-coloured or transparent background.
+  The app remembers your last settings.
 - **Themes**: View → Theme switches between *Berry* (periwinkle, magenta, plum, ivory)
   and *Forest* (orange, cream, green, deep green). The app remembers your choice. Each
   theme also adds a colormap with the same name. To add a palette, add a `Theme` to

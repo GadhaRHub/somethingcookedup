@@ -5,6 +5,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+from PySide6 import QtCore  # noqa: E402
 
 from matplotlib.backend_bases import MouseEvent  # noqa: E402
 
@@ -84,3 +85,53 @@ def test_switch_theme(window):
     finally:
         window.set_theme("Berry")
     assert tab._data_lines[0].get_color() == theme.THEMES["Berry"].series_colors[0]
+
+
+@pytest.mark.parametrize("ext", ["png", "svg", "pdf", "eps", "tiff", "jpg"])
+def test_export_formats(window, tmp_path, ext):
+    from csvplot.export import save_figure
+
+    tab = window.current_tab()
+    before = tuple(tab.figure.get_size_inches())
+    path = tmp_path / f"plot.{ext}"
+    save_figure(tab.figure, str(path), (6, 4), 300, "White")
+    assert path.stat().st_size > 1000
+    assert tuple(tab.figure.get_size_inches()) == before
+    if ext == "png":
+        from matplotlib.image import imread
+
+        assert imread(path).shape[:2] == (1200, 1800)
+
+
+def test_individual_line_style_and_hiding(window):
+    tab = window.current_tab()
+    first, second = tab._plottable()
+    tab._width_spins()[tab.series.index(first)].setValue(4)
+    assert tab._data_lines[0].get_linewidth() == 4
+    assert tab._data_lines[1].get_linewidth() == 1.5
+
+    tab.series_table.selectRow(tab.series.index(second))
+    tab.series_linestyle.setCurrentText("Dashed")
+    tab.series_marker.setCurrentText("Square")
+    tab.series_name.setText("background-subtracted")
+    tab.series_name.editingFinished.emit()
+    line = tab._data_lines[1]
+    assert (line.get_linestyle(), line.get_marker(), line.get_label()) == ("--", "s", "background-subtracted")
+
+    tab.set_series_visible(first, False)
+    assert len(tab._data_lines) == 1
+    assert tab.series_table.item(tab.series.index(first), 0).checkState() == QtCore.Qt.Unchecked
+
+
+def test_legend_click_toggles_line(window):
+    from types import SimpleNamespace
+
+    tab = window.current_tab()
+    target = tab._plottable()[0]
+    handle = next(a for a, s in tab._legend_map.items() if s is target)
+    event = SimpleNamespace(artist=handle, mouseevent=SimpleNamespace(button=1))
+    tab._on_pick(event)
+    assert not target.visible
+    handle = next(a for a, s in tab._legend_map.items() if s is target)
+    tab._on_pick(SimpleNamespace(artist=handle, mouseevent=SimpleNamespace(button=1)))
+    assert target.visible

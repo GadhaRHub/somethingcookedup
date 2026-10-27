@@ -189,26 +189,26 @@ def stylesheet(t: Theme | None = None) -> str:
         border-radius: 9px; font-weight: bold;
     }}
 
-    QLineEdit, QComboBox, QDoubleSpinBox {{
+    QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox {{
         background: white; border: 1px solid {t.border}; border-radius: 9px;
         padding: 4px 8px; min-height: 20px;
         selection-background-color: {t.accent}; selection-color: white;
     }}
-    QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus {{ border: 1px solid {t.accent}; }}
-    QLineEdit:disabled, QComboBox:disabled {{ background: {t.bg}; color: {t.muted}; }}
+    QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {{ border: 1px solid {t.accent}; }}
+    QLineEdit:disabled, QComboBox:disabled, QDoubleSpinBox:disabled, QSpinBox:disabled {{ background: {t.bg}; color: {t.muted}; }}
     QComboBox::drop-down {{ border: none; width: 24px; }}
     QComboBox::down-arrow {{ image: url({icon["down"]}); width: 11px; height: 11px; }}
     QComboBox QAbstractItemView {{
         background: white; border: 1px solid {t.border}; padding: 4px; outline: 0;
         selection-background-color: {t.soft}; selection-color: {t.text};
     }}
-    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button, QSpinBox::up-button, QSpinBox::down-button {{
         subcontrol-origin: border; width: 20px; border: none; background: transparent;
     }}
-    QDoubleSpinBox::up-button {{ subcontrol-position: top right; }}
-    QDoubleSpinBox::down-button {{ subcontrol-position: bottom right; }}
-    QDoubleSpinBox::up-arrow {{ image: url({icon["up"]}); width: 9px; height: 9px; }}
-    QDoubleSpinBox::down-arrow {{ image: url({icon["down"]}); width: 9px; height: 9px; }}
+    QDoubleSpinBox::up-button, QSpinBox::up-button {{ subcontrol-position: top right; }}
+    QDoubleSpinBox::down-button, QSpinBox::down-button {{ subcontrol-position: bottom right; }}
+    QDoubleSpinBox::up-arrow, QSpinBox::up-arrow {{ image: url({icon["up"]}); width: 9px; height: 9px; }}
+    QDoubleSpinBox::down-arrow, QSpinBox::down-arrow {{ image: url({icon["down"]}); width: 9px; height: 9px; }}
 
     QPushButton {{
         background: {t.accent}; color: white; border: none; border-radius: 11px;
@@ -238,7 +238,8 @@ def stylesheet(t: Theme | None = None) -> str:
         padding: 2px; outline: 0;
     }}
     QListWidget::item {{ padding: 4px 6px; border-radius: 6px; }}
-    QListWidget::item:selected {{ background: {t.soft}; }}
+    QListWidget::item:selected {{ background: {t.soft}; color: {t.text}; }}
+    QTableWidget::item:selected {{ background: {t.soft_light}; color: {t.text}; }}
     QHeaderView {{ background: transparent; }}
     QHeaderView::section {{
         background: {t.soft_light}; color: {t.text}; border: none;
