@@ -71,3 +71,16 @@ def test_overlay_and_detach(window):
     assert window.tabs.count() == 0 and len(window.detached) == 1
     window.detached[0].close()
     assert window.tabs.count() == 1
+
+
+def test_switch_theme(window):
+    from csvplot import theme
+
+    tab = window.current_tab()
+    window.set_theme("Forest")
+    try:
+        assert tab._data_lines[0].get_color() == theme.THEMES["Forest"].series_colors[0]
+        assert tab.figure.get_facecolor()[:3] != (1, 1, 1)
+    finally:
+        window.set_theme("Berry")
+    assert tab._data_lines[0].get_color() == theme.THEMES["Berry"].series_colors[0]

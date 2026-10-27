@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -39,14 +40,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import theme
 from .loaders import Dataset
 
 ROW_INDEX = "(row index)"
 
-DEFAULT_COLORS = [to_hex(c) for c in matplotlib.colormaps["tab10"].colors]
-
 COLORMAPS = [
-    "viridis", "plasma", "inferno", "magma", "cividis", "turbo",
+    *theme.THEMES, "viridis", "plasma", "inferno", "magma", "cividis", "turbo",
     "coolwarm", "Spectral", "RdYlBu", "rainbow", "jet",
     "tab10", "tab20", "Set1", "Dark2", "Paired",
 ]
@@ -101,7 +101,7 @@ class ColorButton(QPushButton):
 
     def __init__(self, color: str, parent=None):
         super().__init__(parent)
-        self.setFixedSize(34, 20)
+        self.setFixedSize(36, 22)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("Choose colour")
         self.clicked.connect(self._pick)
@@ -114,8 +114,10 @@ class ColorButton(QPushButton):
     def set_color(self, color: str) -> None:
         self._color = color
         self.setStyleSheet(
-            f"QPushButton {{ background: {color}; border: 1px solid #555; border-radius: 3px; }}"
-            "QPushButton:disabled { border: 1px dashed #999; }"
+            f"QPushButton {{ background: {color}; border: 2px solid white; border-radius: 8px;"
+            " padding: 0; }"
+            f"QPushButton:hover {{ border-color: {theme.current.border}; }}"
+            f"QPushButton:disabled {{ border: 2px dashed white; }}"
         )
 
     def _pick(self) -> None:
@@ -153,6 +155,7 @@ class PlotTab(QWidget):
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
+        theme.apply_matplotlib_style()
         self.figure = Figure(figsize=(8, 5), layout="tight")
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setFocusPolicy(Qt.StrongFocus)
@@ -178,17 +181,22 @@ class PlotTab(QWidget):
 
         self.coord_label = QLabel("Move the mouse over the plot to see coordinates")
         self.coord_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.coord_label.setStyleSheet("font-family: monospace; padding: 2px 4px;")
+        self.coord_label.setObjectName("coords")
 
-        plot_area = QWidget()
+        plot_area = QFrame()
+        plot_area.setObjectName("card")
         pl = QVBoxLayout(plot_area)
-        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setContentsMargins(12, 10, 12, 12)
+        pl.setSpacing(6)
         pl.addWidget(self.toolbar)
         pl.addWidget(self.canvas, 1)
         pl.addWidget(self.coord_label)
 
         panel = QWidget()
+        panel.setObjectName("controls_panel")
         panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(2, 0, 6, 0)
+        panel_layout.setSpacing(10)
         panel_layout.addWidget(self._build_data_group())
         panel_layout.addWidget(self._build_color_group())
         panel_layout.addWidget(self._build_label_group())
@@ -199,7 +207,7 @@ class PlotTab(QWidget):
         self.controls = QScrollArea()
         self.controls.setWidget(panel)
         self.controls.setWidgetResizable(True)
-        self.controls.setMinimumWidth(300)
+        self.controls.setMinimumWidth(320)
         self.controls.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -207,10 +215,10 @@ class PlotTab(QWidget):
         splitter.addWidget(self.controls)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.setSizes([900, 330])
+        splitter.setSizes([900, 340])
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(12, 12, 12, 8)
         layout.addWidget(splitter)
 
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
@@ -229,6 +237,8 @@ class PlotTab(QWidget):
         self.series_table = QTableWidget(0, 2)
         self.series_table.setHorizontalHeaderLabels(["Y series", "Colour"])
         self.series_table.verticalHeader().hide()
+        self.series_table.setShowGrid(False)
+        self.series_table.setFocusPolicy(Qt.NoFocus)
         self.series_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.series_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.series_table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -260,6 +270,7 @@ class PlotTab(QWidget):
 
         self.cmap_combo = QComboBox()
         self.cmap_combo.addItems(COLORMAPS)
+        self.cmap_combo.setCurrentText(theme.current.name)
         self.cmap_combo.setEnabled(False)
         self.cmap_combo.currentTextChanged.connect(lambda _: self.redraw())
         self.cmap_reverse = QCheckBox("Reverse")
@@ -322,6 +333,7 @@ class PlotTab(QWidget):
         apply_btn = QPushButton("Apply")
         apply_btn.clicked.connect(self.apply_ranges)
         auto_btn = QPushButton("Auto-fit")
+        auto_btn.setProperty("secondary", True)
         auto_btn.clicked.connect(self.autoscale)
         grid.addWidget(apply_btn, 2, 1)
         grid.addWidget(auto_btn, 2, 2)
@@ -347,7 +359,7 @@ class PlotTab(QWidget):
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Colour"))
-        self.mark_color = ColorButton("#d62728")
+        self.mark_color = ColorButton(theme.current.accent)
         row.addWidget(self.mark_color)
         self.snap_check = QCheckBox("Snap to data")
         self.snap_check.setChecked(True)
@@ -362,8 +374,10 @@ class PlotTab(QWidget):
 
         row = QHBoxLayout()
         remove_btn = QPushButton("Remove selected")
+        remove_btn.setProperty("secondary", True)
         remove_btn.clicked.connect(self._remove_selected_marks)
         clear_btn = QPushButton("Clear all")
+        clear_btn.setProperty("secondary", True)
         clear_btn.clicked.connect(self.clear_marks)
         row.addWidget(remove_btn)
         row.addWidget(clear_btn)
@@ -375,8 +389,13 @@ class PlotTab(QWidget):
         self.datasets.append(dataset)
         x_default = self.x_column or (dataset.numeric_columns[0] if dataset.numeric_columns else ROW_INDEX)
         for col in dataset.numeric_columns:
-            color = DEFAULT_COLORS[len(self.series) % len(DEFAULT_COLORS)]
-            self.series.append(Series(dataset, col, color, visible=col != x_default))
+            # Hand out palette colours to the plotted series first.
+            n_used = sum(s.visible for s in self.series)
+            visible = col != x_default
+            colors = theme.current.series_colors
+            index = n_used if visible else len(colors) - 1 - len(self.series)
+            color = colors[index % len(colors)]
+            self.series.append(Series(dataset, col, color, visible=visible))
         if not any(s.visible for s in self.series) and self.series:
             self.series[-1].visible = True
         self._refresh_x_combo(x_default)
@@ -427,7 +446,7 @@ class PlotTab(QWidget):
         table.blockSignals(False)
         table.resizeRowsToContents()
         rows_height = sum(table.rowHeight(r) for r in range(table.rowCount()))
-        table.setFixedHeight(min(260, table.horizontalHeader().height() + rows_height + 4))
+        table.setFixedHeight(min(260, table.horizontalHeader().height() + rows_height + 12))
 
     def _color_buttons(self) -> list[ColorButton]:
         return [self.series_table.cellWidget(r, 1).findChild(ColorButton)
@@ -484,6 +503,8 @@ class PlotTab(QWidget):
                 mark.offset = tuple(mark.artists[1].xyann)
 
         ax.clear()
+        self.figure.set_facecolor(theme.current.card)
+        ax.set_facecolor(theme.current.card)
         ax.set_xscale(scales[0])
         ax.set_yscale(scales[1])
         self._last_scales = scales
@@ -560,7 +581,7 @@ class PlotTab(QWidget):
             ann = self.ax.annotate(
                 mark.text, (mark.x, mark.y), xytext=mark.offset, textcoords="offset points",
                 fontsize=fs - 1, color=mark.color, zorder=6,
-                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec=mark.color, alpha=0.85),
+                bbox=dict(boxstyle="round,pad=0.35,rounding_size=0.6", fc=theme.current.card, ec=mark.color, alpha=0.92),
                 arrowprops=dict(arrowstyle="-", color=mark.color, lw=1),
             )
             ann.draggable(True)
@@ -757,6 +778,25 @@ class PlotTab(QWidget):
             self.ax.set_ylim(zoom(self.ax.get_ylim(), event.ydata, self.ax.get_yscale()))
         self.toolbar.push_current()
         self.canvas.draw_idle()
+
+    def change_theme(self, old: theme.Theme, new: theme.Theme) -> None:
+        """Swap colours that came from the old theme's defaults for the new theme's."""
+
+        def swap(color: str) -> str:
+            mapping = dict(zip(old.series_colors, new.series_colors))
+            mapping[old.accent] = new.accent
+            return mapping.get(color, color)
+
+        for s in self.series:
+            s.color = swap(s.color)
+        for mark in [*self.point_marks, *self.region_marks]:
+            mark.color = swap(mark.color)
+        self.mark_color.set_color(swap(self.mark_color.color))
+        if self.cmap_combo.currentText() == old.name:
+            self.cmap_combo.blockSignals(True)
+            self.cmap_combo.setCurrentText(new.name)
+            self.cmap_combo.blockSignals(False)
+        self._after_marks_changed()  # refresh the marks list and redraw
 
     def save_figure(self) -> None:
         self.toolbar.save_figure()

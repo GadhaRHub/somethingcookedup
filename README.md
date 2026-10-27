@@ -40,6 +40,12 @@ You can also drag files onto the window.
 - **Axis ranges**: type the min/max values and Apply, or use Auto-fit. The boxes
   update as you pan and zoom. Log scale for X and/or Y.
 - **Export**: File → Save figure (PNG, SVG, PDF, …).
+- **Themes**: View → Theme switches between *Berry* (periwinkle, magenta, plum, ivory)
+  and *Forest* (orange, cream, green, deep green). The app remembers your choice. Each
+  theme also adds a colormap with the same name. To add a palette, add a `Theme` to
+  `csvplot/theme.py`.
+
+![Berry and Forest themes](docs/themes.png)
 
 ## Adding a file format
 

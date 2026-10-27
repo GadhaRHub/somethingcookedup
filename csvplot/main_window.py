@@ -5,17 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
     QStackedWidget,
     QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
-from . import __version__
+from . import __version__, theme
 from .loaders import file_dialog_filter, load_file
 from .plot_tab import PlotTab
 
@@ -72,19 +75,20 @@ class MainWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self._update_actions)
 
-        empty = QLabel(
-            "<h2>No file open</h2>"
-            "<p>Use <b>File → Open…</b> (Ctrl+O) or drop files here.</p>"
-        )
+        self.empty_label = empty = QLabel()
+        empty.setObjectName("empty_state")
         empty.setAlignment(Qt.AlignCenter)
-        empty.setStyleSheet("color: #777;")
+        empty_page = QWidget()
+        ep = QVBoxLayout(empty_page)
+        ep.addWidget(empty, 0, Qt.AlignCenter)
 
         self.stack = QStackedWidget()
-        self.stack.addWidget(empty)
+        self.stack.addWidget(empty_page)
         self.stack.addWidget(self.tabs)
         self.setCentralWidget(self.stack)
 
         self._build_actions()
+        self._refresh_empty_label()
         self.statusBar().showMessage("Ready")
         self._update_actions()
 
@@ -120,6 +124,15 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.act_detach)
         view_menu.addAction(self.act_controls)
+        theme_menu = view_menu.addMenu("&Theme")
+        self.theme_group = QActionGroup(self)
+        for name, t in theme.THEMES.items():
+            act = QAction(name, self, checkable=True)
+            act.setChecked(t is theme.current)
+            act.setStatusTip(f"Use the {name} colour theme")
+            act.triggered.connect(lambda _=False, n=name: self.set_theme(n))
+            self.theme_group.addAction(act)
+            theme_menu.addAction(act)
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.act_help)
         help_menu.addAction(self.act_about)
@@ -213,6 +226,21 @@ class MainWindow(QMainWindow):
     def toggle_controls(self) -> None:
         if (tab := self.current_tab()) is not None:
             tab.controls.setVisible(not tab.controls.isVisible())
+
+    def set_theme(self, name: str) -> None:
+        old = theme.current
+        new = theme.apply_theme(QApplication.instance(), name)
+        self.settings.setValue("theme", name)
+        self._refresh_empty_label()
+        tabs = [self.tabs.widget(i) for i in range(self.tabs.count())]
+        for tab in tabs + [w.tab for w in self.detached]:
+            tab.change_theme(old, new)
+
+    def _refresh_empty_label(self) -> None:
+        self.empty_label.setText(
+            f"<h2 style='color:{theme.current.accent}'>No file open</h2>"
+            "<p>Use <b>Open</b> (Ctrl+O) or drop files here.</p>"
+        )
 
     def show_help(self) -> None:
         QMessageBox.information(self, "Mouse controls", MOUSE_HELP)
