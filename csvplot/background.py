@@ -109,21 +109,32 @@ def double_exponential(time, signal, force_decay: bool = True, fit_mask=None):
                 p0[i] = upper[i] - 1e-9 * max(1.0, abs(upper[i]))
         return p0
 
+    kwargs = {"bounds": (lower, upper)} if force_decay else {}
+    # Speed-up (not in the original): compare the starting points on a thinned
+    # copy of long traces, then refine the winner once on all points.
+    step = max(1, x.size // 2000)
+    xs, ys = x[::step], y[::step]
     best, best_cost = None, np.inf
     for p0 in guesses:
         p0 = prepare(p0)
         if p0 is None:
             continue
         try:
-            kwargs = {"bounds": (lower, upper)} if force_decay else {}
-            popt, _ = curve_fit(_model, x, y, p0=p0, maxfev=20000, **kwargs)
+            popt, _ = curve_fit(_model, xs, ys, p0=p0, maxfev=20000, **kwargs)
         except Exception:  # noqa: BLE001 - try the next starting point
             continue
-        cost = float(np.sum((y - _model(x, *popt)) ** 2))
+        cost = float(np.sum((ys - _model(xs, *popt)) ** 2))
         if np.isfinite(cost) and cost < best_cost:
             best, best_cost = popt, cost
     if best is None:
         return fallback
+    if step > 1:
+        try:
+            refined, _ = curve_fit(_model, x, y, p0=prepare(best), maxfev=20000, **kwargs)
+            if np.sum((y - _model(x, *refined)) ** 2) <= np.sum((y - _model(x, *best)) ** 2):
+                best = refined
+        except Exception:  # noqa: BLE001 - keep the thinned-data fit
+            pass
 
     fit = _model((time - t_min) / scale, *best)
     a_n, b_n, c_n, d_n = best

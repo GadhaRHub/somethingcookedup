@@ -66,7 +66,7 @@ class AnalysisWindow(QDialog):
         self.resize(1300, 840)
 
         self._timer = QTimer(self, singleShot=True, interval=300)
-        self._timer.timeout.connect(self.run)
+        self._timer.timeout.connect(self._run_busy)
 
         controls = QWidget()
         controls.setObjectName("controls_panel")
@@ -79,7 +79,7 @@ class AnalysisWindow(QDialog):
         scroll = QScrollArea()
         scroll.setWidget(controls)
         scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(390)
+        scroll.setMinimumWidth(450)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.figure = Figure(figsize=(8, 6), layout="constrained")
@@ -122,7 +122,7 @@ class AnalysisWindow(QDialog):
         splitter.addWidget(scroll)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([400, 900])
+        splitter.setSizes([460, 860])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addWidget(splitter)
@@ -130,6 +130,9 @@ class AnalysisWindow(QDialog):
             # Long entries shouldn't widen (and clip) the settings panel.
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(12)
+        # Wide enough for every row (incl. the (i) buttons) plus the scroll bar.
+        scroll.setMinimumWidth(max(450, controls.minimumSizeHint().width() + 28))
+        splitter.setSizes([scroll.minimumWidth() + 10, 860])
 
         self.refresh_choices()
         self.on_ready()
@@ -220,6 +223,13 @@ class AnalysisWindow(QDialog):
 
     def _schedule(self, *_) -> None:
         self._timer.start()
+
+    def _run_busy(self) -> None:
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.run()
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def selected_series(self) -> list:
         data = self.series_combo.currentData()

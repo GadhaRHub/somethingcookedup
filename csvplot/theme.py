@@ -192,6 +192,16 @@ def stylesheet(t: Theme | None = None) -> str:
     QToolBar#main_toolbar QToolButton:disabled {{ color: {_rgba(t.bar_text, 0.4)}; background: {_rgba(t.soft, 0.06)}; }}
 
     QTabWidget::pane {{ border: none; }}
+    QTabWidget#ribbon::pane {{ border: none; background: transparent; }}
+    QTabWidget#ribbon QTabBar::tab {{
+        background: transparent; color: {_rgba(t.bar_text, 0.75)}; margin: 0 2px 0 0;
+        padding: 4px 14px; border-radius: 8px; font-weight: 600;
+    }}
+    QTabWidget#ribbon QTabBar::tab:first {{ margin-left: 0; }}
+    QTabWidget#ribbon QTabBar::tab:selected {{ background: {_rgba(t.soft, 0.22)}; color: {t.bar_text}; }}
+    QTabWidget#ribbon QTabBar::tab:hover:!selected {{ background: {_rgba(t.soft, 0.12)}; color: {t.bar_text}; }}
+    QWidget#ribbon_page {{ background: transparent; }}
+    QFrame#ribbon_sep {{ background: {_rgba(t.bar_text, 0.25)}; margin: 4px 2px; }}
     QTabBar {{ qproperty-drawBase: 0; }}
     QTabBar::tab {{
         background: {t.soft}; color: {t.text}; padding: 8px 8px 8px 16px;

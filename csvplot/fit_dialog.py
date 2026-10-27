@@ -295,13 +295,28 @@ class FitDialog(AnalysisWindow):
     def process(self, s, x_range):
         """Run the pipeline on one series; returns a FitResult (x already offset)."""
         x, y, rng, color = self.series_data(s, x_range)
-        settings = self.settings()
-        settings.exclude = [(lo - s.x_offset, hi - s.x_offset) for lo, hi in self._excluded(x_range)]
-        result = fit_background(x, y, settings, self.tab._series_label(s), rng)
-        result.x = result.x + s.x_offset
-        result.edges = result.edges + s.x_offset
+        result = self.process_arrays(x, y, rng, self.tab._series_label(s), s.x_offset, x_range)
         result.color = color
         return result
+
+    def process_arrays(self, x, y, rng, label: str = "", x_offset: float = 0.0, x_range=None):
+        """The same pipeline on plain arrays (used by the echo windows).
+        ``rng`` is in data coordinates; marked regions are shifted by ``x_offset``.
+        Results are cached, so tuning an echo method doesn't refit the background."""
+        settings = self.settings()
+        settings.exclude = [(lo - x_offset, hi - x_offset) for lo, hi in self._excluded(x_range)]
+        x, y = np.asarray(x, float), np.asarray(y, float)
+        key = (repr(settings), label, x_offset, None if rng is None else tuple(map(float, rng)),
+               x.size, hash(x.tobytes()), hash(y.tobytes()))
+        cache = self.__dict__.setdefault("_cache", {})
+        if key not in cache:
+            result = fit_background(x, y, settings, label, rng)
+            result.x = result.x + x_offset
+            result.edges = result.edges + x_offset
+            if len(cache) > 16:
+                cache.pop(next(iter(cache)))
+            cache[key] = result
+        return cache[key]
 
     def run(self) -> None:
         x_range = self.x_range()

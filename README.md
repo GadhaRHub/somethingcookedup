@@ -120,8 +120,8 @@ You can also drag files onto the window.
 
 ## Spectral analysis (windowed FFT, periods)
 
-*Spectral analysis (FFT)* in the plot's second toolbar row, or **Analysis → Windowed FFT
-/ periods…** (Ctrl+Shift+F), opens an analysis window for the current plot:
+The **Analysis** ribbon tab → *Windowed FFT / periods* (Ctrl+Shift+F) opens an
+analysis window for the current plot:
 
 - **Lines**: one line, or *all lines shown on the plot*.
 - **Range**: the *current view* (follows the plot as you zoom and pan), the full data,
@@ -142,41 +142,74 @@ You can also drag files onto the window.
 
 Uneven x spacing is resampled onto a uniform grid, and the window says so.
 
-## Background fit and echo extraction
+## The ribbon: Home, Analysis, Echo extraction
 
-*Background fit / echoes* in the plot's second toolbar row, or **Analysis → Background
-fit / echo extraction…** (Ctrl+Shift+B), fits the slow background with polynomials and
-subtracts it, leaving the fast features (the echoes) in the residual.
+The tabs above the plots group the tools:
 
-- **Polynomials**: the range is split into N pieces, each fitted with its own polynomial.
-- **Degrees**: give a range, e.g. 1 to 5. Every degree in it is fitted, then either:
-  - **the best one is kept**: by **BIC** (prefers simpler curves, so it stays on the
-    background) or **AIC**, or always the maximum, or
-  - **all are combined in a weighted average**:
-    - **Akaike weights (AIC)** or **BIC weights**: the standard statistical model
-      average. With many points these often give nearly all the weight to one degree.
-    - **Goodness of fit**: weight 1/residual², a gentler blend.
-    - **Equal weights**: a plain average.
+- **Home**: open files, add to the plot, export the figure, detach the plot, data table,
+  open and save sessions.
+- **Analysis**: spectral analysis (windowed FFT, periods) and background and
+  oscillation removal.
+- **Echo extraction**: background and oscillation removal (the pre-processing), TWITE,
+  and matched-subspace echo matching.
 
-  The table shows each degree's share, averaged over the pieces. Averaging works with
-  every model (spline, pieces, single polynomial). With a single polynomial and equal
-  weights, a low minimum degree, e.g. a straight line, gets a full share, so start the
-  range at 2–3 there.
-- **Model**:
-  - *Spline*: the pieces are joined smoothly, with no steps or kinks. Degree up to 5.
-  - *Independent pieces*: each piece fitted on its own, blended over an adjustable
-    overlap where pieces meet. The table lists the degree chosen for each piece.
-  - *Single polynomial*: one polynomial over the whole range.
-- **Leave marked regions out of the fit**: mark the echoes as regions first, so the
-  background can't bend to follow them. Left-out regions are shaded.
-- **Residual**: data − fit or fit − data.
-- **Output**: the summary table (degrees, RMS of the residual, R²), figure export, a CSV
-  of data, fit and residual. You can also add the fit and residual to the current plot,
-  open the residual as a new plot, or **Analyse residual (FFT)**: this opens the
-  residual with the spectral analysis already running, to get the echo periods.
+Every parameter in these windows has an **ⓘ** button: hover over it or click it to see
+what the parameter does.
 
-Lines, range (current view, full, marked region) and session saving work as in the
-spectral analysis window.
+## Background and oscillation removal
+
+Analysis or Echo extraction → *Background fit / echo extraction* (Ctrl+Shift+B). This
+follows the Extracting_echos notebook:
+
+1. **Background**: by default a **double exponential** a·e^(bx) + c·e^(dx), a port of
+   `minus_exp_fun_single3` from `diffR_functions_mine.py`, with *force decay*.
+   Polynomial models are also available: a spline, independent pieces, or a single
+   polynomial, with the best degree by BIC/AIC or a weighted average of degrees.
+   Marked regions can be left out of the fit.
+2. **Oscillations** (e.g. Brillouin): in sliding windows (length and overlap adjustable)
+   the strongest spectral peaks are found, sinusoids are least-squares fitted at those
+   frequencies, and overlapping windows are cross-faded. You can limit this to
+   frequency bands, like the notebook's `families`, e.g. `25-50, 60-90, 120-160` GHz.
+   Without this step the residual is dominated by the oscillations and looks like the
+   signal itself.
+3. **Residual** = data − background − oscillations: the echoes.
+
+Frequencies are shown in GHz when x is in ps. The window shows all three stages and a
+summary table. You can export the figure, save the curves as CSV, add the background,
+oscillations and residual to the plot, open the residual as a new plot, or analyse it
+with the FFT.
+
+## Echo extraction: TWITE and echo matching
+
+Both windows have an *Input signal* choice: the **residual** (background and
+oscillations removed), the **background-removed** signal, or the line as it is. The
+pre-processing uses the settings of the background-removal window.
+
+- **TWITE** (Ctrl+Shift+T), ported from `twite.py`: two-way identification of trailing
+  echoes. Detector A (amplitude) and detector B (ZNCC shape match against echo 1) look
+  for the harmonic train k·t1. All parameters can be set: ignore-before, quiet window,
+  max order, threshold, merge gap, noise multiple, harmonic tolerance, template
+  half-width, search radius, accept-within, minimum correlation, low-pass, binning.
+  The presets fill in the notebook's settings for the residual (`params_res`) or the
+  background-removed signal (`params_sig`), or the twite.py defaults. Results show the
+  echo train with its k·t1 grid, plus a table of k, time, offset, detector and |ZNCC|.
+- **Echo matching** (Ctrl+Shift+M), ported from `echo_match.py`: whitening, echo
+  templates learned from the data (SVD of aligned seed snippets), a matched-subspace
+  detector with the local baseline and oscillations projected out, and iterative
+  detect-and-subtract with a family-wise false-alarm threshold from noise surrogates.
+  The noise comes either from a **quiet window** of a single trace (noise generated
+  with that stretch's spectrum) or from **repeats**: every line shown on the plot is a
+  repeat, and they are averaged and half-split as in the notebook. Repeats also enable
+  the timing **bootstrap**. Seed echo times can be typed or taken from TWITE.
+  Oscillation frequencies can be typed or estimated. Long traces are binned to about
+  3000 points by default for speed.
+
+Both can **mark the echoes on the plot** as regions, export the figure, and copy or save
+the table. Their settings are saved in sessions.
+
+TWITE's amplitude threshold is a fraction of the whole trace's peak, so a large feature
+at early times (e.g. ringing near t = 0) can hide later echoes. Restrict the range (zoom
+the plot, or pick a marked region) or lower the threshold.
 
 ## Icon
 

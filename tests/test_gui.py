@@ -677,3 +677,56 @@ def test_fit_dialog_and_outputs(window, tmp_path, monkeypatch):
     restored = window.tabs.widget(0).fit_dialog
     assert restored.pieces.value() == 10 and restored.exclude.isChecked()
     assert restored.series_combo.currentText() == "dRR_Ti_10nm: dR_over_R"
+
+
+def test_echo_windows(window, tmp_path, monkeypatch):
+    from csvplot.export import save_figure
+    from csvplot.session import save_session
+
+    tab = window.current_tab()
+    tab.ax.set_xlim(100, 600)
+
+    tab.open_twite()
+    tw = tab.twite_dialog
+    tw.series_combo.setCurrentText("dR_over_R")
+    tw.t_ignore.setValue(105)
+    tw.quiet_lo.setValue(250)
+    tw.quiet_hi.setValue(400)
+    tw.pct.setValue(0.3)
+    tw.run()
+    r = tw.results[0]
+    assert r["t1"] is not None and r["echoes"]
+    assert tw.table.rowCount() == len(r["echoes"])
+    n_marks = len(tab.region_marks)
+    tw.mark_on_plot()
+    assert len(tab.region_marks) == n_marks + len(r["echoes"])
+    save_figure(tw.figure, str(tmp_path / "twite.png"), (6, 4), 100, "White", tw.export_style, 9)
+
+    tab.open_echo_match()
+    em = tab.echo_match_dialog
+    em.series_combo.setCurrentText("dR_over_R")
+    em.quiet_lo.setValue(250)
+    em.quiet_hi.setValue(400)
+    em.seeds.setText("105, 210, 520")
+    em.run()
+    assert em.results and em.results[0]["seeds"] == [105, 210, 520]
+    assert em.table.rowCount() == len(em.results[0]["events"])
+    assert "GHz" in em.freq_unit.text() or em.freq_unit.text()
+
+    # Settings travel with the session.
+    path = tmp_path / "s.csvplot"
+    save_session(window, path)
+    window.close_all()
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *a, **k: None)
+    window.open_session(path)
+    tab = window.tabs.widget(0)
+    assert tab.twite_dialog.pct.value() == pytest.approx(0.3)
+    assert tab.echo_match_dialog.seeds.text() == "105, 210, 520"
+
+
+def test_ribbon_tabs(window):
+    names = [window.ribbon.tabText(i) for i in range(window.ribbon.count())]
+    assert names == ["Home", "Analysis", "Echo extraction"]
+    window.act_twite.trigger()
+    assert window.current_tab().twite_dialog.isVisible()
+    window.current_tab().twite_dialog.close()

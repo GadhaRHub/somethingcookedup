@@ -9,6 +9,8 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QKeySequence, QP
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QFrame,
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStackedWidget,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -155,7 +158,13 @@ class MainWindow(QMainWindow):
         self.act_fft = action("&Windowed FFT / periods…", self.open_fft, "Ctrl+Shift+F",
                               "Spectral analysis of the current plot: window, overlap, periods")
         self.act_fit = action("&Background fit / echo extraction…", self.open_fit, "Ctrl+Shift+B",
-                              "Fit the background with piecewise polynomials and subtract it")
+                              "Remove the background and oscillations; the residual holds the echoes")
+        self.act_twite = action("&TWITE echo train…", self.open_twite, "Ctrl+Shift+T",
+                                "Two-way identification of trailing echoes (amplitude + shape)")
+        self.act_echo_match = action("Echo &matching…", self.open_echo_match, "Ctrl+Shift+M",
+                                     "Matched-subspace echo detection with a noise-calibrated threshold")
+        self.act_toggle_data = action("Data table", self.toggle_data, None,
+                                      "Show the raw values next to the plot")
         self.act_help = action("&Mouse controls", self.show_help, QKeySequence.HelpContents)
         self.act_about = action("&About", self.show_about)
 
@@ -183,6 +192,9 @@ class MainWindow(QMainWindow):
         analysis_menu = self.menuBar().addMenu("&Analysis")
         analysis_menu.addAction(self.act_fft)
         analysis_menu.addAction(self.act_fit)
+        echo_menu = self.menuBar().addMenu("&Echo extraction")
+        echo_menu.addAction(self.act_twite)
+        echo_menu.addAction(self.act_echo_match)
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.act_help)
         help_menu.addAction(self.act_about)
@@ -190,15 +202,45 @@ class MainWindow(QMainWindow):
         toolbar = self.addToolBar("Main")
         toolbar.setObjectName("main_toolbar")
         toolbar.setMovable(False)
-        for act in (self.act_open, self.act_add, self.act_save, self.act_detach):
-            toolbar.addAction(act)
 
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        toolbar.addWidget(spacer)
+        # Ribbon: tabs of buttons above the plots.
+        self.ribbon = QTabWidget()
+        self.ribbon.setObjectName("ribbon")
+        self.ribbon.setDocumentMode(True)
+        self.ribbon.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        pages = {
+            "Home": [self.act_open, self.act_add, self.act_save, self.act_detach,
+                     self.act_toggle_data, None, self.act_open_session, self.act_save_session],
+            "Analysis": [self.act_fft, self.act_fit],
+            "Echo extraction": [self.act_fit, None, self.act_twite, self.act_echo_match],
+        }
+        for name, actions in pages.items():
+            page = QWidget()
+            page.setObjectName("ribbon_page")
+            row = QHBoxLayout(page)
+            row.setContentsMargins(0, 6, 0, 0)
+            row.setSpacing(8)
+            for act in actions:
+                if act is None:
+                    sep = QFrame()
+                    sep.setObjectName("ribbon_sep")
+                    sep.setFixedWidth(1)
+                    row.addWidget(sep)
+                    continue
+                button = QToolButton()
+                button.setDefaultAction(act)
+                button.setToolTip(act.statusTip() or act.text())
+                row.addWidget(button)
+            row.addStretch(1)
+            self.ribbon.addTab(page, name)
+        toolbar.addWidget(self.ribbon)
+
+        session = QWidget()
+        session_row = QHBoxLayout(session)
+        session_row.setContentsMargins(12, 0, 0, 0)
         caption = QLabel("Session")
         caption.setObjectName("session_caption")
-        toolbar.addWidget(caption)
+        session_row.addWidget(caption)
         self.session_edit = QLineEdit()
         self.session_edit.setObjectName("session_name")
         self.session_edit.setPlaceholderText("Untitled session")
@@ -207,7 +249,8 @@ class MainWindow(QMainWindow):
         self.session_edit.setClearButtonEnabled(True)
         self.session_edit.textChanged.connect(self._update_title)
         self.session_edit.returnPressed.connect(lambda: self.tabs.setFocus())
-        toolbar.addWidget(self.session_edit)
+        session_row.addWidget(self.session_edit)
+        toolbar.addWidget(session)
         self._style_session_edit()
 
     def _style_session_edit(self) -> None:
@@ -222,6 +265,7 @@ class MainWindow(QMainWindow):
         has_tab = self.tabs.count() > 0
         for act in (self.act_add, self.act_save, self.act_close, self.act_detach, self.act_controls,
                     self.act_rename_tab, self.act_data, self.act_fft, self.act_fit,
+                    self.act_twite, self.act_echo_match, self.act_toggle_data,
                     self.act_save_session,
                     self.act_save_session_as):
             act.setEnabled(has_tab)
@@ -369,6 +413,14 @@ class MainWindow(QMainWindow):
     def open_fit(self) -> None:
         if (tab := self.current_tab()) is not None:
             tab.open_fit()
+
+    def open_twite(self) -> None:
+        if (tab := self.current_tab()) is not None:
+            tab.open_twite()
+
+    def open_echo_match(self) -> None:
+        if (tab := self.current_tab()) is not None:
+            tab.open_echo_match()
 
     def close_tab(self, index: int) -> None:
         if index < 0:

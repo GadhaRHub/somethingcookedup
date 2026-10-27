@@ -233,6 +233,8 @@ class PlotTab(QWidget):
         self._loading = False   # restoring a session: skip intermediate redraws
         self._fft_state: dict | None = None   # analysis settings waiting for the window
         self._fit_state: dict | None = None
+        self._twite_state: dict | None = None
+        self._echo_match_state: dict | None = None
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -283,16 +285,7 @@ class PlotTab(QWidget):
         self.act_data.setToolTip("Show the raw values next to the plot (Ctrl+T)")
         self.act_data.toggled.connect(lambda on: self.show_data_preview() if on else self.close_data_preview())
         self.tools_bar.addAction(self.act_data)
-        self.tools_bar.addSeparator()
-        self.act_fft = QAction("Spectral analysis (FFT)", self)
-        self.act_fft.setToolTip("Windowed FFT / Welch / spectrogram and period extraction")
-        self.act_fft.triggered.connect(self.open_fft)
-        self.tools_bar.addAction(self.act_fft)
-        self.act_fit = QAction("Background fit / echoes", self)
-        self.act_fit.setToolTip("Fit the background with piecewise polynomials and subtract it\n"
-                                "to extract echoes")
-        self.act_fit.triggered.connect(self.open_fit)
-        self.tools_bar.addAction(self.act_fit)
+
         self.apply_toolbar_icons()
         self.act_mark_point.toggled.connect(lambda on: self._set_mark_mode("point", on))
         self.act_mark_region.toggled.connect(lambda on: self._set_mark_mode("region", on))
@@ -1609,7 +1602,8 @@ class PlotTab(QWidget):
         self.act_data.setChecked(False)
         self.act_data.blockSignals(False)
 
-    def _open_analysis(self, attr: str, state_attr: str, cls) -> None:
+    def _ensure_analysis(self, attr: str, state_attr: str, cls):
+        """The analysis window for ``attr``, created (but not shown) if needed."""
         dialog = getattr(self, attr, None)
         if dialog is None:
             dialog = cls(self)
@@ -1617,7 +1611,18 @@ class PlotTab(QWidget):
             if getattr(self, state_attr):   # settings restored from a session
                 dialog.apply_state(getattr(self, state_attr))
                 setattr(self, state_attr, None)
-        else:
+        return dialog
+
+    def fit_pipeline(self):
+        """The background/oscillation pipeline (settings of the Background fit window)."""
+        from .fit_dialog import FitDialog
+
+        return self._ensure_analysis("fit_dialog", "_fit_state", FitDialog)
+
+    def _open_analysis(self, attr: str, state_attr: str, cls) -> None:
+        existed = getattr(self, attr, None) is not None
+        dialog = self._ensure_analysis(attr, state_attr, cls)
+        if existed:
             dialog.refresh_choices()
         dialog.show()
         dialog.raise_()
@@ -1632,6 +1637,16 @@ class PlotTab(QWidget):
         from .fit_dialog import FitDialog
 
         self._open_analysis("fit_dialog", "_fit_state", FitDialog)
+
+    def open_twite(self) -> None:
+        from .echo_dialogs import TwiteDialog
+
+        self._open_analysis("twite_dialog", "_twite_state", TwiteDialog)
+
+    def open_echo_match(self) -> None:
+        from .echo_dialogs import EchoMatchDialog
+
+        self._open_analysis("echo_match_dialog", "_echo_match_state", EchoMatchDialog)
 
     def toggle_data_layout(self) -> None:
         """Switch the data table between below the plot and beside it."""
@@ -1723,6 +1738,10 @@ class PlotTab(QWidget):
                          else self._fft_state),
             "background_fit": (self.fit_dialog.get_state() if getattr(self, "fit_dialog", None)
                                else self._fit_state),
+            "twite": (self.twite_dialog.get_state() if getattr(self, "twite_dialog", None)
+                      else self._twite_state),
+            "echo_match": (self.echo_match_dialog.get_state()
+                           if getattr(self, "echo_match_dialog", None) else self._echo_match_state),
         }
 
     def apply_state(self, state: dict) -> None:
@@ -1789,10 +1808,13 @@ class PlotTab(QWidget):
             self._fft_state = dict(state["analysis"])
             if self._fft_state.get("open"):
                 self.open_fft()
-        if state.get("background_fit"):
-            self._fit_state = dict(state["background_fit"])
-            if self._fit_state.get("open"):
-                self.open_fit()
+        for key, attr, opener in (("background_fit", "_fit_state", self.open_fit),
+                                  ("twite", "_twite_state", self.open_twite),
+                                  ("echo_match", "_echo_match_state", self.open_echo_match)):
+            if state.get(key):
+                setattr(self, attr, dict(state[key]))
+                if state[key].get("open"):
+                    opener()
 
     def save_figure(self) -> str | None:
         name = self.custom_name or "_".join(d.path.stem for d in self.datasets)
