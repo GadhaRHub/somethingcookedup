@@ -51,6 +51,7 @@ from . import theme
 from .data_view import DataPreview
 from .export import export_figure
 from .loaders import Dataset
+from .symbols import SymbolButton, safe_text
 
 ROW_INDEX = "(row index)"
 
@@ -105,6 +106,21 @@ class PointMark:
     @property
     def text(self) -> str:
         return f"({self.x:.6g}, {self.y:.6g})"
+
+
+@dataclass
+class TextMark:
+    """Free text or an equation placed on the plot (supports $...$ math)."""
+
+    x: float
+    y: float
+    content: str
+    color: str
+    artists: list = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return self.content
 
 
 @dataclass
@@ -182,6 +198,11 @@ class PlotTab(QWidget):
         self._selected_marks: set[int] = set()   # ids of marks selected in the list
         self._drag: dict | None = None           # region being moved/resized
         self._line_series: dict = {}
+        self.text_marks: list[TextMark] = []
+        self._legend = None
+        self._legend_pos: tuple[float, float] | None = None   # set by dragging the legend
+        self._legend_drawn_loc = None
+        self._math_errors: list[str] = []
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -220,8 +241,13 @@ class PlotTab(QWidget):
         )
         self.act_mark_region = QAction("Mark region", self, checkable=True)
         self.act_mark_region.setToolTip("Drag horizontally on the plot to shade an x-range.")
+        self.act_add_text = QAction("Add text / equation", self, checkable=True)
+        self.act_add_text.setToolTip("Click on the plot to place text or an equation, e.g. $E = mc^2$.\n"
+                                     "Drag it to move, double-click to edit, right-click to remove.")
+        self.act_add_text.toggled.connect(lambda on: self._set_mark_mode("text", on))
         self.tools_bar.addAction(self.act_mark_point)
         self.tools_bar.addAction(self.act_mark_region)
+        self.tools_bar.addAction(self.act_add_text)
         self.tools_bar.addSeparator()
         self.act_data = QAction("Data table", self, checkable=True)
         self.act_data.setToolTip("Show the raw values next to the plot (Ctrl+T)")
@@ -258,6 +284,7 @@ class PlotTab(QWidget):
         panel_layout.addWidget(self._build_series_style_group())
         panel_layout.addWidget(self._build_color_group())
         panel_layout.addWidget(self._build_label_group())
+        panel_layout.addWidget(self._build_legend_group())
         panel_layout.addWidget(self._build_axes_group())
         panel_layout.addWidget(self._build_ticks_group())
         panel_layout.addWidget(self._build_marks_group())
@@ -403,7 +430,7 @@ class PlotTab(QWidget):
         return box
 
     def _build_label_group(self) -> QGroupBox:
-        box = QGroupBox("Title && legend")
+        box = QGroupBox("Title && labels")
         form = QFormLayout(box)
         self.title_edit = QLineEdit()
         self.xlabel_edit = QLineEdit()
@@ -422,17 +449,14 @@ class PlotTab(QWidget):
         self.font_size.valueChanged.connect(lambda _: self.redraw())
         form.addRow("Font size", self.font_size)
 
-        self.legend_check = QCheckBox("Show legend")
-        self.legend_check.setChecked(True)
-        self.legend_check.setToolTip("The legend can be dragged with the mouse.")
-        self.legend_check.toggled.connect(lambda _: self.redraw())
-        self.legend_loc = QComboBox()
-        self.legend_loc.addItems(LEGEND_LOCATIONS)
-        self.legend_loc.currentTextChanged.connect(lambda _: self.redraw())
-        row = QHBoxLayout()
-        row.addWidget(self.legend_check)
-        row.addWidget(self.legend_loc, 1)
-        form.addRow(row)
+        self.symbols = SymbolButton([self.title_edit, self.xlabel_edit, self.ylabel_edit,
+                                     self.xname_edit, self.series_name])
+        form.addRow(self.symbols)
+        math_hint = QLabel("Math: put LaTeX between $…$, e.g. $\\Delta R/R$, cm$^{-1}$, $\\tau_{1}$")
+        math_hint.setObjectName("hint")
+        math_hint.setWordWrap(True)
+        math_hint.setTextFormat(Qt.PlainText)
+        form.addRow(math_hint)
 
         self.accent_axes = QCheckBox("Accent-coloured axes && ticks")
         self.accent_axes.setToolTip("Draw the axes, ticks, labels and title in the theme's accent colour.")
@@ -446,6 +470,47 @@ class PlotTab(QWidget):
         self.plot_background.currentTextChanged.connect(lambda _: self.redraw())
         form.addRow("Background", self.plot_background)
         return box
+
+    def _build_legend_group(self) -> QGroupBox:
+        box = QGroupBox("Legend")
+        form = QFormLayout(box)
+        self.legend_check = QCheckBox("Show legend")
+        self.legend_check.setChecked(True)
+        self.legend_check.toggled.connect(lambda _: self.redraw())
+        form.addRow(self.legend_check)
+
+        self.legend_loc = QComboBox()
+        self.legend_loc.addItems(LEGEND_LOCATIONS)
+        self.legend_loc.currentTextChanged.connect(lambda _: self._reset_legend_position())
+        form.addRow("Position", self.legend_loc)
+
+        self.legend_reset = QPushButton("Reset dragged position")
+        self.legend_reset.setProperty("secondary", True)
+        self.legend_reset.setToolTip("Drag the legend on the plot to move it; this puts it back.")
+        self.legend_reset.setEnabled(False)
+        self.legend_reset.clicked.connect(self._reset_legend_position)
+        form.addRow(self.legend_reset)
+
+        self.legend_line_length = QDoubleSpinBox(minimum=0.5, maximum=10, singleStep=0.5, value=2.0)
+        self.legend_line_length.setToolTip("Length of the line sample in the legend (in font sizes).")
+        self.legend_line_length.valueChanged.connect(lambda _: self.redraw())
+        form.addRow("Line length", self.legend_line_length)
+
+        self.legend_cols = QSpinBox(minimum=1, maximum=8, value=1)
+        self.legend_cols.valueChanged.connect(lambda _: self.redraw())
+        form.addRow("Columns", self.legend_cols)
+
+        self.legend_box = QCheckBox("Box around legend")
+        self.legend_box.setChecked(True)
+        self.legend_box.toggled.connect(lambda _: self.redraw())
+        form.addRow(self.legend_box)
+        return box
+
+    def _reset_legend_position(self) -> None:
+        self._legend_pos = None
+        self._legend = None  # forget the drag so redraw uses the chosen position
+        self.legend_reset.setEnabled(False)
+        self.redraw()
 
     def _build_axes_group(self) -> QGroupBox:
         box = QGroupBox("Axis ranges")
@@ -705,7 +770,11 @@ class PlotTab(QWidget):
                 for r in range(self.series_table.rowCount())]
 
     def _on_series_toggled(self, item: QTableWidgetItem) -> None:
-        self.series[item.row()].visible = item.checkState() == Qt.Checked
+        s = self.series[item.row()]
+        visible = item.checkState() == Qt.Checked
+        if visible == s.visible:
+            return  # e.g. the row was only renamed; keep the current view
+        s.visible = visible
         self.redraw(keep_view=False)
 
     def set_series_visible(self, s: Series, visible: bool) -> None:
@@ -818,6 +887,12 @@ class PlotTab(QWidget):
         return ds.frame[col].to_numpy(dtype=float), col
 
     # -------------------------------------------------------------- drawing
+    def _safe(self, text: str) -> str:
+        shown, ok = safe_text(text)
+        if not ok:
+            self._math_errors.append(repr(text))
+        return shown
+
     def _draw_theme(self) -> theme.Theme:
         return self._export_theme or theme.current
 
@@ -844,6 +919,16 @@ class PlotTab(QWidget):
             # Remember where the user dragged the label to.
             if len(mark.artists) == 2:
                 mark.offset = tuple(mark.artists[1].xyann)
+        for mark in self.text_marks:
+            if mark.artists:
+                mark.x, mark.y = map(float, mark.artists[0].xyann)
+        if self._legend is not None:
+            loc = getattr(self._legend, "_loc", None)
+            # Dragging changes the legend's location to axes coordinates.
+            if isinstance(loc, tuple) and loc != self._legend_drawn_loc:
+                self._legend_pos = tuple(map(float, loc))
+                self.legend_reset.setEnabled(True)
+        self._math_errors = []
 
         ax.clear()
         self.figure.set_facecolor(t.card)
@@ -868,7 +953,7 @@ class PlotTab(QWidget):
             x = x + s.x_offset
             y = s.dataset.frame[s.column].to_numpy(dtype=float) + s.y_offset
             (line,) = ax.plot(
-                x, y, color=color, label=self._series_label(s), linestyle=s.linestyle,
+                x, y, color=color, label=self._safe(self._series_label(s)), linestyle=s.linestyle,
                 linewidth=s.width, marker=s.marker, markersize=s.markersize, alpha=s.alpha,
             )
             line.set_visible(s.visible)
@@ -886,9 +971,9 @@ class PlotTab(QWidget):
         self.xlabel_edit.setPlaceholderText(f"(auto) {auto_x}")
         self.xname_edit.setPlaceholderText(f"(auto) {auto_x}")
         self.ylabel_edit.setPlaceholderText(f"(auto) {auto_y}" if auto_y else "(none)")
-        ax.set_title(self.title_edit.text() or auto_title, fontsize=fs + 2)
-        ax.set_xlabel(self.xlabel_edit.text() or auto_x, fontsize=fs)
-        ax.set_ylabel(self.ylabel_edit.text() or auto_y, fontsize=fs)
+        ax.set_title(self._safe(self.title_edit.text() or auto_title), fontsize=fs + 2)
+        ax.set_xlabel(self._safe(self.xlabel_edit.text() or auto_x), fontsize=fs)
+        ax.set_ylabel(self._safe(self.ylabel_edit.text() or auto_y), fontsize=fs)
         ax.tick_params(labelsize=fs - 1)
         if self.accent_axes.isChecked():
             for spine in ax.spines.values():
@@ -899,11 +984,16 @@ class PlotTab(QWidget):
         if self._grid_on():
             ax.grid(True, color=t.border, alpha=0.6 if t.dark else 0.3)
         self._legend_map = {}
+        self._legend = None
         if self.legend_check.isChecked() and lines:
             # Hidden lines stay in the legend, faded, so a click brings them back.
+            loc = self._legend_pos or self.legend_loc.currentText()
             legend = ax.legend([l for _, l in lines], [l.get_label() for _, l in lines],
-                               loc=self.legend_loc.currentText(), fontsize=fs - 1)
+                               loc=loc, fontsize=fs - 1, ncols=self.legend_cols.value(),
+                               handlelength=self.legend_line_length.value(),
+                               frameon=self.legend_box.isChecked())
             legend.set_draggable(True)
+            self._legend, self._legend_drawn_loc = legend, getattr(legend, "_loc", None)
             for (s, _), handle, text in zip(lines, legend.legend_handles, legend.get_texts()):
                 handle.set_visible(True)
                 for artist in (handle, text):
@@ -921,6 +1011,9 @@ class PlotTab(QWidget):
             ax.autoscale(True)
             ax.autoscale_view()
         self._apply_ticks(ax, t, fs)
+        if self._math_errors:
+            self.statusMessage.emit("Could not read the math in: " + ", ".join(self._math_errors)
+                                    + " (shown as plain text)")
 
         # ax.clear() drops axes callbacks, so reconnect every time.
         ax.callbacks.connect("xlim_changed", lambda _: self._sync_range_fields())
@@ -934,6 +1027,15 @@ class PlotTab(QWidget):
 
     def _draw_marks(self) -> None:
         fs = self._font()
+        for mark in self.text_marks:
+            selected = id(mark) in self._selected_marks
+            ann = self.ax.annotate(
+                self._safe(mark.content), (mark.x, mark.y), xycoords="data", fontsize=fs + 1,
+                color=mark.color, zorder=7, annotation_clip=False,
+                bbox=dict(boxstyle="round,pad=0.3", fc="none", ec=mark.color, lw=1, ls="--")
+                if selected else None)
+            ann.draggable(True)
+            mark.artists = [ann]
         for mark in self.region_marks:
             selected = id(mark) in self._selected_marks
             mark.artists = [self.ax.axvspan(
@@ -1009,8 +1111,9 @@ class PlotTab(QWidget):
     # ---------------------------------------------------------------- marks
     def _set_mark_mode(self, mode: str, on: bool) -> None:
         if on:
-            other = self.act_mark_region if mode == "point" else self.act_mark_point
-            other.setChecked(False)
+            for other_mode, action in self._mode_actions().items():
+                if other_mode != mode:
+                    action.setChecked(False)
             # Leave matplotlib's pan/zoom mode so clicks reach us.
             if self.toolbar.mode == _Mode.PAN:
                 self.toolbar.pan()
@@ -1021,17 +1124,16 @@ class PlotTab(QWidget):
             self._span.set_active(on)
         self.canvas.setCursor(Qt.CrossCursor if self._mark_mode() else Qt.ArrowCursor)
 
+    def _mode_actions(self) -> dict:
+        return {"point": self.act_mark_point, "region": self.act_mark_region, "text": self.act_add_text}
+
     def _mark_mode(self) -> str | None:
-        if self.act_mark_point.isChecked():
-            return "point"
-        if self.act_mark_region.isChecked():
-            return "region"
-        return None
+        return next((m for m, a in self._mode_actions().items() if a.isChecked()), None)
 
     def _on_nav_mode(self) -> None:
         if self.toolbar.mode != _Mode.NONE:
-            self.act_mark_point.setChecked(False)
-            self.act_mark_region.setChecked(False)
+            for action in self._mode_actions().values():
+                action.setChecked(False)
 
     def _on_span(self, xmin: float, xmax: float) -> None:
         if xmin == xmax:
@@ -1055,8 +1157,16 @@ class PlotTab(QWidget):
                 best = (xy[i, 0], xy[i, 1], line, d[i])
         return best
 
+    def _text_mark_at(self, event) -> TextMark | None:
+        for mark in reversed(self.text_marks):
+            if mark.artists and mark.artists[0].contains(event)[0]:
+                return mark
+        return None
+
     def _mark_at(self, event):
         """Return the mark under the mouse, if any."""
+        if (text := self._text_mark_at(event)) is not None:
+            return text
         for mark in reversed(self.point_marks):
             sx, sy = self.ax.transData.transform((mark.x, mark.y))
             if np.hypot(sx - event.x, sy - event.y) < PICK_RADIUS_PX or (
@@ -1067,6 +1177,40 @@ class PlotTab(QWidget):
             if mark.artists and mark.artists[0].contains(event)[0]:
                 return mark
         return None
+
+    def _marks_of(self, mark) -> list:
+        if isinstance(mark, PointMark):
+            return self.point_marks
+        if isinstance(mark, TextMark):
+            return self.text_marks
+        return self.region_marks
+
+    def _ask_text(self, title: str, current: str = "") -> str | None:
+        while True:
+            text, ok = QInputDialog.getText(
+                self, title, "Text or equation. Put math between $…$, e.g.\n"
+                "$E = mc^2$,  $\\Delta R/R \\propto e^{-t/\\tau}$,  $\\frac{a}{b}$,  cm$^{-1}$",
+                QLineEdit.Normal, current)
+            if not ok or not text.strip():
+                return None
+            if safe_text(text)[1]:
+                return text
+            QMessageBox.warning(self, "Invalid math",
+                                "That math could not be read; please check the $…$ part.")
+            current = text
+
+    def _add_text_at(self, event) -> None:
+        content = self._ask_text("Add text / equation")
+        if content:
+            self.text_marks.append(TextMark(float(event.xdata), float(event.ydata), content,
+                                            self.mark_color.color))
+            self._after_marks_changed()
+
+    def _edit_text_mark(self, mark: TextMark) -> None:
+        content = self._ask_text("Edit text / equation", mark.content)
+        if content:
+            mark.content = content
+            self._after_marks_changed()
 
     def _region_hit(self, event):
         """(region, "left" | "right" | "move") under the mouse, preferring selected regions."""
@@ -1108,6 +1252,14 @@ class PlotTab(QWidget):
             return
         if event.inaxes is not self.ax:
             return
+        if event.button == 1 and event.dblclick and (text := self._text_mark_at(event)) is not None:
+            self._edit_text_mark(text)
+            return
+        if event.button == 1 and not event.dblclick and self._text_mark_at(event) is not None:
+            return  # matplotlib's draggable text handles the drag
+        if event.button == 1 and not event.dblclick and self._mark_mode() == "text":
+            self._add_text_at(event)
+            return
         if event.button == 1 and not event.dblclick:
             mark, kind = self._region_hit(event)
             # Without a marking tool any region can be grabbed; with one, only
@@ -1123,7 +1275,7 @@ class PlotTab(QWidget):
         if event.button == 3:
             mark = self._mark_at(event)
             if mark is not None:
-                (self.point_marks if isinstance(mark, PointMark) else self.region_marks).remove(mark)
+                self._marks_of(mark).remove(mark)
                 self._after_marks_changed()
             return
         if event.button != 1 or self._mark_mode() != "point" or event.dblclick:
@@ -1150,7 +1302,7 @@ class PlotTab(QWidget):
         self.marks_list.blockSignals(False)
 
     def _after_marks_changed(self) -> None:
-        alive = {id(m) for m in [*self.point_marks, *self.region_marks]}
+        alive = {id(m) for m in [*self.point_marks, *self.region_marks, *self.text_marks]}
         self._selected_marks &= alive
         self.marks_list.blockSignals(True)
         self.marks_list.clear()
@@ -1164,6 +1316,11 @@ class PlotTab(QWidget):
             item.setForeground(QColor(mark.color))
             item.setData(Qt.UserRole, mark)
             self.marks_list.addItem(item)
+        for mark in self.text_marks:
+            item = QListWidgetItem(f"Text  {mark.text}")
+            item.setForeground(QColor(mark.color))
+            item.setData(Qt.UserRole, mark)
+            self.marks_list.addItem(item)
         for i in range(self.marks_list.count()):
             item = self.marks_list.item(i)
             item.setSelected(id(item.data(Qt.UserRole)) in self._selected_marks)
@@ -1174,11 +1331,13 @@ class PlotTab(QWidget):
         selected = {id(i.data(Qt.UserRole)) for i in self.marks_list.selectedItems()}
         self.point_marks = [m for m in self.point_marks if id(m) not in selected]
         self.region_marks = [m for m in self.region_marks if id(m) not in selected]
+        self.text_marks = [m for m in self.text_marks if id(m) not in selected]
         self._after_marks_changed()
 
     def clear_marks(self) -> None:
         self.point_marks.clear()
         self.region_marks.clear()
+        self.text_marks.clear()
         self._after_marks_changed()
 
     # ---------------------------------------------------------------- mouse
@@ -1277,7 +1436,7 @@ class PlotTab(QWidget):
 
         for s in self.series:
             s.color = swap(s.color)
-        for mark in [*self.point_marks, *self.region_marks]:
+        for mark in [*self.point_marks, *self.region_marks, *self.text_marks]:
             mark.color = swap(mark.color)
         self.mark_color.set_color(swap(self.mark_color.color))
         if self.cmap_combo.currentText() == old.name:

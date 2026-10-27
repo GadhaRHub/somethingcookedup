@@ -308,6 +308,13 @@ def stylesheet(t: Theme | None = None) -> str:
     }}
 
     QLabel#hint {{ color: {t.muted}; }}
+    QToolButton#symbols {{
+        background: {t.input}; color: {t.text}; border: 1px solid {t.border};
+        border-radius: 11px; padding: 6px 14px; font-weight: 600;
+    }}
+    QToolButton#symbols:hover {{ background: {t.soft_light}; }}
+    QToolButton#symbols::menu-indicator {{ image: url({icon["down"]}); width: 10px; height: 10px;
+        subcontrol-position: right center; right: 8px; }}
     QLabel#export_preview {{
         background: {t.bg}; border: 1px dashed {t.border}; border-radius: 14px;
     }}

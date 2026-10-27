@@ -357,3 +357,74 @@ def test_data_table_beside_plot(window):
     assert tab.controls.isVisibleTo(tab)
     tab.close_data_preview()
     assert tab.views.count() == 1
+
+
+def test_legend_drag_is_kept_and_options(window):
+    tab = window.current_tab()
+    tab._legend._loc = (0.1, 0.2)          # what dragging the legend does
+    tab.redraw()
+    assert tab._legend._loc == (0.1, 0.2) and tab.legend_reset.isEnabled()
+    tab.legend_line_length.setValue(4)
+    tab.legend_box.setChecked(False)
+    tab.legend_cols.setValue(2)
+    legend = tab.ax.get_legend()
+    assert legend._loc == (0.1, 0.2)       # still where it was dragged
+    assert legend.handlelength == 4 and not legend.get_frame_on() and legend._ncols == 2
+    tab.legend_reset.click()
+    assert tab.ax.get_legend()._loc != (0.1, 0.2) and not tab.legend_reset.isEnabled()
+
+
+def test_math_labels_and_invalid_math(window):
+    tab = window.current_tab()
+    tab.ylabel_edit.setText(r"$\Delta R/R$ (10$^{-3}$)")
+    tab.redraw()
+    assert tab.ax.get_ylabel() == r"$\Delta R/R$ (10$^{-3}$)"
+    messages = []
+    tab.statusMessage.connect(messages.append)
+    tab.title_edit.setText(r"$\frac{a}$")   # broken math must not break drawing
+    tab.redraw()
+    tab.canvas.draw()
+    assert tab.ax.get_title() == r"\$\frac{a}\$" and messages
+
+
+def test_insert_math_helpers(app):
+    from csvplot.symbols import insert_math
+
+    edit = QtWidgets.QLineEdit("cm-1")
+    edit.setSelection(2, 2)                 # select "-1"
+    insert_math(edit, "^{{{}}}|2")
+    assert edit.text() == "cm$^{-1}$"
+    edit.setText(r"$\Delta R$")
+    edit.setCursorPosition(7)               # inside the math, after "\Delta"
+    insert_math(edit, r"\mu")
+    assert edit.text() == r"$\Delta\mu R$"
+
+
+def test_text_and_equation_marks(window, monkeypatch):
+    tab = window.current_tab()
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
+                        lambda *a, **k: (r"$E = mc^2$", True))
+    tab.act_add_text.setChecked(True)
+    assert not tab.act_mark_point.isChecked()
+    _mouse(tab, "button_press_event", 300, 0.02)
+    assert [m.content for m in tab.text_marks] == [r"$E = mc^2$"]
+    mark = tab.text_marks[0]
+    assert mark.artists[0].get_text() == r"$E = mc^2$"
+    assert "Text" in tab.marks_list.item(tab.marks_list.count() - 1).text()
+    # Right-click removes it.
+    tab.canvas.draw()
+    bbox = mark.artists[0].get_window_extent()
+    event = MouseEvent("button_press_event", tab.canvas, bbox.x0 + 2, bbox.y0 + 2, button=3)
+    tab.canvas.callbacks.process("button_press_event", event)
+    assert tab.text_marks == []
+
+
+def test_renaming_a_line_keeps_the_zoom(window):
+    tab = window.current_tab()
+    tab.xmin_edit.setText("-1")
+    tab.xmax_edit.setText("20")
+    tab.apply_ranges()
+    tab.series_table.selectRow(tab.series.index(tab._plottable()[0]))
+    tab.series_name.setText("renamed")
+    tab.series_name.editingFinished.emit()
+    assert tab.ax.get_xlim() == (-1, 20)

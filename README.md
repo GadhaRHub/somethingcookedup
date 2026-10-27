@@ -49,6 +49,19 @@ You can also drag files onto the window.
   applies only to that line, e.g. to stack curves; the cursor readout still shows the
   original data values. *Apply this style to all lines*
   copies the style to every series.
+- **Legend**: drag it anywhere on the plot and it stays there (*Reset dragged position*
+  puts it back). Choose its position, number of columns, the length of the line sample,
+  and whether it has a box.
+- **Math and equations**: anything between `$…$` is drawn as math using LaTeX syntax
+  (matplotlib's built-in *mathtext*, no LaTeX installation needed). It works in the
+  title, axis names, legend names and on-plot text, e.g. `$\Delta R/R$`,
+  `cm$^{-1}$`, `$\tau_{1}$`, `$\frac{v}{2d}$`. The *Insert symbol / super, subscript*
+  menu inserts Greek letters, operators, units, superscripts, subscripts, fractions and
+  roots into the last field you clicked; select text first to wrap it, e.g. turn "-1"
+  in "cm-1" into a superscript. Math that can't be read is shown as plain text rather
+  than breaking the plot.
+- **Text and equations on the plot**: *Add text / equation* (second toolbar row), then
+  click where it should go. Drag to move, double-click to edit, right-click to remove.
 - **Hide lines**: untick a series, or click its legend entry to hide or show it.
   Hidden lines stay in the legend, faded.
 - **Colours**: choose a colour per series, or colour all series from a **colormap**
@@ -70,7 +83,7 @@ You can also drag files onto the window.
   double column, 16:9 or 4:3 slide, poster panel) set the size, resolution and font
   size in one click. Exports from the dark theme on a white or transparent
   background automatically use dark text.
-- **Accent-coloured axes**: an option under *Title & legend* draws the axes, ticks,
+- **Accent-coloured axes**: an option under *Title & labels* draws the axes, ticks,
   labels and title in the theme's accent colour.
 - **Data table** (optional): the *Data table* toolbar button or View → Show/hide data
   table (Ctrl+T) shows the raw values together with the plot, below or beside it
