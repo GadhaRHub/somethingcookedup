@@ -149,9 +149,19 @@ fit / echo extraction…** (Ctrl+Shift+B), fits the slow background with polynom
 subtracts it, leaving the fast features (the echoes) in the residual.
 
 - **Polynomials**: the range is split into N pieces, each fitted with its own polynomial.
-- **Degrees**: give a range, e.g. 1 to 5. Each degree is tried and the best is kept by
-  **BIC** (prefers simpler curves, so it stays on the background) or **AIC**, or you
-  can always use the maximum.
+- **Degrees**: give a range, e.g. 1 to 5. Every degree in it is fitted, then either:
+  - **the best one is kept**: by **BIC** (prefers simpler curves, so it stays on the
+    background) or **AIC**, or always the maximum, or
+  - **all are combined in a weighted average**:
+    - **Akaike weights (AIC)** or **BIC weights**: the standard statistical model
+      average. With many points these often give nearly all the weight to one degree.
+    - **Goodness of fit**: weight 1/residual², a gentler blend.
+    - **Equal weights**: a plain average.
+
+  The table shows each degree's share, averaged over the pieces. Averaging works with
+  every model (spline, pieces, single polynomial). With a single polynomial and equal
+  weights, a low minimum degree, e.g. a straight line, gets a full share, so start the
+  range at 2–3 there.
 - **Model**:
   - *Spline*: the pieces are joined smoothly, with no steps or kinks. Degree up to 5.
   - *Independent pieces*: each piece fitted on its own, blended over an adjustable

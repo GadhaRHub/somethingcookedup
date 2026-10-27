@@ -323,7 +323,9 @@ class AnalysisWindow(QDialog):
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             for j, value in enumerate(row):
-                item = QTableWidgetItem(self.format_cell(j, value))
+                text = self.format_cell(j, value)
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)   # long entries (e.g. degree weights) are cut off
                 if not isinstance(value, str):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.table.setItem(i, j, item)

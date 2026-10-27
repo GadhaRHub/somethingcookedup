@@ -68,7 +68,8 @@ class FitDialog(AnalysisWindow):
         degrees.addWidget(self.degree_min)
         degrees.addWidget(QLabel("to"))
         degrees.addWidget(self.degree_max)
-        form.addRow("Degrees", degrees)
+        degrees.addStretch(1)
+        form.addRow("Degree range", degrees)
         self.degree_note = QLabel(f"Splines use degrees up to {MAX_SPLINE_DEGREE}.")
         self.degree_note.setObjectName("hint")
         form.addRow(self.degree_note)
@@ -76,10 +77,17 @@ class FitDialog(AnalysisWindow):
         self.criterion = QComboBox()
         self.criterion.addItems(CRITERIA)
         self.criterion.setToolTip(
-            "Each degree in the range is tried and the best is kept.\n"
-            "BIC penalises extra terms more than AIC, so it stays closer to the slow background.")
+            "Every degree in the range is fitted. Then either:\n"
+            "• the best one is kept (BIC penalises extra terms more than AIC, so it stays\n"
+            "  closer to the slow background), or\n"
+            "• all of them are combined in a weighted average:\n"
+            "  – Akaike / BIC weights: the statistically standard model average; with many\n"
+            "    points they often give nearly all the weight to one degree,\n"
+            "  – goodness of fit: weight 1/residual², a gentler blend,\n"
+            "  – equal weights: a plain average.\n"
+            "The table shows each degree's share.")
         self.criterion.currentTextChanged.connect(self._schedule)
-        form.addRow("Choose degree", self.criterion)
+        form.addRow("Degrees", self.criterion)
 
         self.blend = QSpinBox(minimum=0, maximum=100, singleStep=5, value=20, suffix=" % of a piece")
         self.blend.setToolTip("Neighbouring pieces overlap by this much and are blended smoothly.")
@@ -189,8 +197,7 @@ class FitDialog(AnalysisWindow):
             for r in self.results:
                 ax_fit.plot(r.x, r.y, color=r.color, lw=1.0, alpha=0.75, label=f"{r.label}")
                 ax_fit.plot(r.x, r.fit, color=t.text, lw=1.6, ls="--",
-                            label=f"fit ({len(r.edges) - 1} × deg {r.degree_text})"
-                            if len(self.results) == 1 else None)
+                            label=self._fit_label(r) if len(self.results) == 1 else None)
                 ax_res.plot(r.x, r.residual, color=r.color, lw=1.0, label=r.label)
             if self.show_edges.isChecked() and self.results and len(self.results[0].edges) > 2:
                 for edge in self.results[0].edges[1:-1]:
@@ -207,6 +214,13 @@ class FitDialog(AnalysisWindow):
                 ax_res.legend(fontsize="small")
         self.canvas.draw_idle()
         self._update_info()
+
+    def _fit_label(self, r) -> str:
+        pieces = len(r.edges) - 1
+        if r.weights:
+            lo, hi = sorted((self.degree_min.value(), self.degree_max.value()))
+            return f"fit ({pieces} × weighted average of degrees {lo}–{hi})"
+        return f"fit ({pieces} × degree {r.degree_text})"
 
     def _update_info(self) -> None:
         if not self.results:
