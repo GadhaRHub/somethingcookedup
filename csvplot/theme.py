@@ -207,8 +207,6 @@ def stylesheet(t: Theme | None = None) -> str:
     QTabBar::close-button:selected {{ image: url({icon["close-light"]}); }}
     QTabBar::close-button:hover {{ background: {_rgba(t.text, 0.15)}; }}
 
-    QTabWidget#views QTabBar::tab {{ margin-top: 0; margin-bottom: 8px; padding: 6px 14px; }}
-    QTabWidget#views QTabBar::tab:first {{ margin-left: 0; }}
     QFrame#card {{ background: {t.card}; border: 1px solid {t.border}; border-radius: 18px; }}
     QLabel#empty_state {{
         background: {t.card}; border: 2px dashed {t.border}; border-radius: 24px;
@@ -293,7 +291,7 @@ def stylesheet(t: Theme | None = None) -> str:
     QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
     QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 
-    QSplitter::handle {{ background: transparent; width: 10px; }}
+    QSplitter::handle {{ background: transparent; width: 10px; height: 10px; }}
 
     QFrame#card QToolBar {{ background: {t.card}; border: none; spacing: 4px; padding: 2px; }}
     QFrame#card QToolButton {{

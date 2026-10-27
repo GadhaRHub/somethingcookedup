@@ -72,6 +72,8 @@ class DataPreview(QFrame):
         self.dataset_combo = QComboBox()
         self.dataset_combo.currentIndexChanged.connect(self._show_dataset)
         self.info = QLabel()
+        self.layout_button = QPushButton("Place beside plot")
+        self.layout_button.setProperty("secondary", True)
         close_btn = QPushButton("Close table")
         close_btn.setProperty("secondary", True)
         close_btn.clicked.connect(self.closeRequested)
@@ -80,6 +82,7 @@ class DataPreview(QFrame):
         header.addWidget(QLabel("<b>Dataset</b>"))
         header.addWidget(self.dataset_combo, 1)
         header.addWidget(self.info)
+        header.addWidget(self.layout_button)
         header.addWidget(close_btn)
 
         self.model = DataFrameModel(parent=self)

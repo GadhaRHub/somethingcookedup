@@ -29,7 +29,9 @@ You can also drag files onto the window.
   **File → Add to current plot** (Ctrl+Shift+O) overlays another file on the open plot.
 - **Automatic plotting from column names**: the first numeric column is used as X and
   the other columns are plotted against it. You can pick any column for X, or use
-  the row number, and tick which columns to show as Y series.
+  the row number, and tick which columns to show as Y series. Rename the X axis in
+  the *X name* field. You can also double-click the title or an axis label on the
+  plot to rename it.
 - **Interactive canvas**
   - Mouse wheel zooms around the cursor (hold Shift to zoom only X, Ctrl to zoom only Y)
   - Pan tool: drag to move the plot. Zoom tool: drag a box to zoom into it.
@@ -37,11 +39,15 @@ You can also drag files onto the window.
   - The cursor's x/y position and the nearest data point are shown under the plot
   - The legend and mark labels can be dragged
 - **Marks**: *Mark point* (click to mark a point; it snaps to the nearest data point
-  if snapping is on) and *Mark region* (drag to shade an x-range). Right-click a mark,
-  or use the Marks list, to remove it. Mark colours are configurable.
+  if snapping is on) and *Mark region* (drag to shade an x-range). Select a region in
+  the Marks list, or click it on the plot, to highlight it. Drag it to move it, or drag
+  its edges to resize it. Right-click a mark, or use the Marks list, to remove it.
+  Mark colours are configurable.
 - **Per-line styling**: each series has its own colour and line width in the series
   table. Select a row to set its legend name, line style (solid, dashed, dotted,
-  dash-dot, none), marker, marker size and opacity. *Apply this style to all lines*
+  dash-dot, none), marker, marker size, opacity and an **X/Y offset**. The offset
+  applies only to that line, e.g. to stack curves; the cursor readout still shows the
+  original data values. *Apply this style to all lines*
   copies the style to every series.
 - **Hide lines**: untick a series, or click its legend entry to hide or show it.
   Hidden lines stay in the legend, faded.
@@ -67,7 +73,8 @@ You can also drag files onto the window.
 - **Accent-coloured axes**: an option under *Title & legend* draws the axes, ticks,
   labels and title in the theme's accent colour.
 - **Data table** (optional): the *Data table* toolbar button or View → Show/hide data
-  table (Ctrl+T) opens the raw values in a tab next to the plot. It only opens when
+  table (Ctrl+T) shows the raw values together with the plot, below or beside it
+  (*Place beside/below plot*), with the controls panel still on the right. It only opens when
   you ask, unless you turn on View → *Open data table with new files*.
 - **Themes**: View → Theme switches between *Berry* (periwinkle, magenta, plum, ivory),
   *Forest* (orange, cream, green, deep green) and *Night* (a dark theme for long

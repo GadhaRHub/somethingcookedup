@@ -286,3 +286,74 @@ def test_icon_follows_theme(window):
         assert "icon-forest.svg" in window.empty_label.text()
     finally:
         window.set_theme("Berry")
+
+
+def _mouse(tab, kind, x, y, button=1, dblclick=False):
+    tab.canvas.draw()
+    px, py = tab.ax.transData.transform((x, y))
+    event = MouseEvent(kind, tab.canvas, px, py, button=button, dblclick=dblclick)
+    tab.canvas.callbacks.process(kind, event)
+
+
+def test_region_highlight_move_and_resize(window):
+    from csvplot.plot_tab import RegionMark
+
+    tab = window.current_tab()
+    region = RegionMark(100, 200, "#CC088A")
+    tab.region_marks.append(region)
+    tab._after_marks_changed()
+
+    # Selecting it in the list highlights it.
+    tab.marks_list.item(0).setSelected(True)
+    patch = region.artists[0]
+    assert patch.get_alpha() > 0.3 and patch.get_linewidth() == 2
+
+    # Drag the middle: moves; drag the right edge: resizes.
+    _mouse(tab, "button_press_event", 150, 0.01)
+    _mouse(tab, "motion_notify_event", 200, 0.01)
+    _mouse(tab, "button_release_event", 200, 0.01)
+    assert (round(region.xmin), round(region.xmax)) == (150, 250)
+    _mouse(tab, "button_press_event", 250, 0.01)
+    _mouse(tab, "motion_notify_event", 300, 0.01)
+    _mouse(tab, "button_release_event", 300, 0.01)
+    assert (round(region.xmin), round(region.xmax)) == (150, 300)
+    assert tab.marks_list.item(0).isSelected()
+    assert "150" in tab.marks_list.item(0).text()
+
+
+def test_x_axis_name(window):
+    tab = window.current_tab()
+    tab.xname_edit.setText("Delay (ps)")
+    tab.xname_edit.editingFinished.emit()
+    assert tab.ax.get_xlabel() == "Delay (ps)"
+    assert tab.xlabel_edit.text() == "Delay (ps)"
+    tab.xlabel_edit.setText("")
+    tab.redraw()
+    assert tab.ax.get_xlabel() == "t_ps" and tab.xname_edit.text() == ""
+
+
+def test_series_offsets(window):
+    tab = window.current_tab()
+    first, second = tab._plottable()
+    tab.series_table.selectRow(tab.series.index(second))
+    tab.series_y_offset.setText("0.01")
+    tab.series_x_offset.setText("2")
+    tab.series_x_offset.editingFinished.emit()
+    raw_x = second.dataset.frame["t_ps"].to_numpy()
+    raw_y = second.dataset.frame[second.column].to_numpy()
+    line = tab._data_lines[1]
+    assert abs(line.get_xdata()[0] - (raw_x[0] + 2)) < 1e-12
+    assert abs(line.get_ydata()[0] - (raw_y[0] + 0.01)) < 1e-12
+    assert tab._data_lines[0].get_ydata()[0] == first.dataset.frame[first.column].iloc[0]
+
+
+def test_data_table_beside_plot(window):
+    tab = window.current_tab()
+    tab.show_data_preview()
+    assert tab.views.count() == 2 and tab.data_preview.isVisibleTo(tab)
+    assert tab.views.orientation() == QtCore.Qt.Vertical
+    tab.data_preview.layout_button.click()
+    assert tab.views.orientation() == QtCore.Qt.Horizontal
+    assert tab.controls.isVisibleTo(tab)
+    tab.close_data_preview()
+    assert tab.views.count() == 1

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -39,8 +40,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QSplitter,
-    QTabBar,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -75,6 +74,7 @@ TICK_DIRECTIONS = {"Outside": "out", "Inside": "in", "Both": "inout"}
 MAX_TICKS = 500
 
 PICK_RADIUS_PX = 12
+EDGE_GRAB_PX = 6
 
 
 @dataclass
@@ -89,6 +89,8 @@ class Series:
     marker: str = ""
     markersize: float = 4.0
     alpha: float = 1.0
+    x_offset: float = 0.0   # added to this series only, e.g. to stack curves
+    y_offset: float = 0.0
 
 
 @dataclass
@@ -149,6 +151,13 @@ class ColorButton(QPushButton):
             self.colorChanged.emit(chosen.name())
 
 
+def _parse_float(text: str, default: float = 0.0) -> float:
+    try:
+        return float(text)
+    except ValueError:
+        return default
+
+
 def _float_edit(placeholder: str) -> QLineEdit:
     edit = QLineEdit()
     edit.setPlaceholderText(placeholder)
@@ -169,6 +178,9 @@ class PlotTab(QWidget):
         self._export_theme: theme.Theme | None = None
         self._export_font: float | None = None
         self._export_grid: bool | None = None
+        self._selected_marks: set[int] = set()   # ids of marks selected in the list
+        self._drag: dict | None = None           # region being moved/resized
+        self._line_series: dict = {}
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -252,17 +264,11 @@ class PlotTab(QWidget):
         self.controls.setMinimumWidth(320)
         self.controls.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        # Plot and (optional) data table live in tabs; the bar hides when
-        # only the plot is open.
-        self.views = QTabWidget()
-        self.views.setObjectName("views")
-        self.views.setDocumentMode(True)
-        self.views.setTabsClosable(True)
-        self.views.setTabBarAutoHide(True)
-        self.views.addTab(plot_area, "Plot")
-        self.views.tabBar().setTabButton(0, QTabBar.RightSide, None)
-        self.views.tabBar().setTabButton(0, QTabBar.LeftSide, None)
-        self.views.tabCloseRequested.connect(lambda i: i > 0 and self.close_data_preview())
+        # The plot and the (optional) data table share a splitter, so both are
+        # visible at once next to the controls panel.
+        self.views = QSplitter(Qt.Vertical)
+        self.views.setChildrenCollapsible(False)
+        self.views.addWidget(plot_area)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.views)
@@ -277,6 +283,7 @@ class PlotTab(QWidget):
 
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
         self.canvas.mpl_connect("button_press_event", self._on_press)
+        self.canvas.mpl_connect("button_release_event", self._on_release)
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
         self.canvas.mpl_connect("pick_event", self._on_pick)
         self.canvas.mpl_connect("axes_leave_event", lambda e: self.coord_label.setText(""))
@@ -288,6 +295,13 @@ class PlotTab(QWidget):
         self.x_combo = QComboBox()
         self.x_combo.currentTextChanged.connect(self._on_x_changed)
         form.addRow("X axis", self.x_combo)
+
+        # Same value as "X label" under Title & labels; kept in sync.
+        self.xname_edit = QLineEdit()
+        self.xname_edit.setToolTip("Name shown on the X axis. Leave empty for the column name.\n"
+                                   "Tip: double-click an axis label or the title on the plot to rename it.")
+        self.xname_edit.editingFinished.connect(self.redraw)
+        form.addRow("X name", self.xname_edit)
 
         self.series_table = QTableWidget(0, 3)
         self.series_table.setHorizontalHeaderLabels(["Y series", "Colour", "Width"])
@@ -337,6 +351,18 @@ class PlotTab(QWidget):
         self.series_alpha = QSpinBox(minimum=5, maximum=100, singleStep=5, suffix=" %")
         form.addRow("Opacity", self.series_alpha)
 
+        self.series_x_offset, self.series_y_offset = _float_edit("0"), _float_edit("0")
+        for edit, axis in ((self.series_x_offset, "X"), (self.series_y_offset, "Y")):
+            edit.setToolTip(f"Added to this line's {axis} values only (the data is unchanged).\n"
+                            "Useful for stacking curves.")
+            edit.editingFinished.connect(self._on_series_style_changed)
+        offsets = QHBoxLayout()
+        offsets.addWidget(QLabel("X"))
+        offsets.addWidget(self.series_x_offset)
+        offsets.addWidget(QLabel("Y"))
+        offsets.addWidget(self.series_y_offset)
+        form.addRow("Offset", offsets)
+
         for widget in (self.series_linestyle, self.series_marker):
             widget.currentTextChanged.connect(lambda _: self._on_series_style_changed())
         for widget in (self.series_markersize, self.series_alpha):
@@ -379,6 +405,10 @@ class PlotTab(QWidget):
         self.ylabel_edit = QLineEdit()
         for edit in (self.title_edit, self.xlabel_edit, self.ylabel_edit):
             edit.editingFinished.connect(self.redraw)
+        self.xname_edit.textChanged.connect(
+            lambda text: self.xlabel_edit.text() != text and self.xlabel_edit.setText(text))
+        self.xlabel_edit.textChanged.connect(
+            lambda text: self.xname_edit.text() != text and self.xname_edit.setText(text))
         form.addRow("Title", self.title_edit)
         form.addRow("X label", self.xlabel_edit)
         form.addRow("Y label", self.ylabel_edit)
@@ -528,7 +558,8 @@ class PlotTab(QWidget):
 
         hint = QLabel(
             "Use <b>Mark point</b> / <b>Mark region</b> in the plot toolbar. "
-            "Right-click a mark to remove it."
+            "Select a region here (or click it on the plot) to highlight it; drag it to move, "
+            "or drag its edges to resize. Right-click a mark to remove it."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -546,6 +577,7 @@ class PlotTab(QWidget):
         self.marks_list = QListWidget()
         self.marks_list.setMinimumHeight(80)
         self.marks_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.marks_list.itemSelectionChanged.connect(self._on_mark_selection)
         layout.addWidget(self.marks_list)
 
         row = QHBoxLayout()
@@ -694,7 +726,8 @@ class PlotTab(QWidget):
     def _load_series_editor(self, row: int) -> None:
         s = self.series[row] if 0 <= row < len(self.series) else None
         widgets = (self.series_name, self.series_linestyle, self.series_marker,
-                   self.series_markersize, self.series_alpha)
+                   self.series_markersize, self.series_alpha,
+                   self.series_x_offset, self.series_y_offset)
         for w in widgets:
             w.setEnabled(s is not None)
             w.blockSignals(True)
@@ -709,6 +742,8 @@ class PlotTab(QWidget):
             self.series_marker.setCurrentText(next(k for k, v in MARKERS.items() if v == s.marker))
             self.series_markersize.setValue(s.markersize)
             self.series_alpha.setValue(round(s.alpha * 100))
+            self.series_x_offset.setText(f"{s.x_offset:g}" if s.x_offset else "")
+            self.series_y_offset.setText(f"{s.y_offset:g}" if s.y_offset else "")
         for w in widgets:
             w.blockSignals(False)
 
@@ -727,6 +762,8 @@ class PlotTab(QWidget):
             self.series_marker.blockSignals(False)
         s.markersize = self.series_markersize.value()
         s.alpha = self.series_alpha.value() / 100
+        s.x_offset = _parse_float(self.series_x_offset.text())
+        s.y_offset = _parse_float(self.series_y_offset.text())
         self.series_table.item(self.series.index(s), 0).setText(self._series_label(s))
         self.style_target.setText(f"Editing <b>{self._series_label(s)}</b>")
         self.redraw()
@@ -813,6 +850,7 @@ class PlotTab(QWidget):
         fs = self._font()
 
         self._data_lines = []
+        self._line_series = {}
         lines = []
         colored = self._series_colors()
         use_cmap = self.use_cmap.isChecked()
@@ -822,12 +860,14 @@ class PlotTab(QWidget):
             button.set_color(color_of.get(id(s), s.color) if use_cmap else s.color)
         for s, color in colored:
             x, _ = self._x_values(s.dataset)
-            y = s.dataset.frame[s.column].to_numpy(dtype=float)
+            x = x + s.x_offset
+            y = s.dataset.frame[s.column].to_numpy(dtype=float) + s.y_offset
             (line,) = ax.plot(
                 x, y, color=color, label=self._series_label(s), linestyle=s.linestyle,
                 linewidth=s.width, marker=s.marker, markersize=s.markersize, alpha=s.alpha,
             )
             line.set_visible(s.visible)
+            self._line_series[line] = s
             lines.append((s, line))
             if s.visible:
                 self._data_lines.append(line)
@@ -839,6 +879,7 @@ class PlotTab(QWidget):
         auto_title = self.title
         self.title_edit.setPlaceholderText(f"(auto) {auto_title}")
         self.xlabel_edit.setPlaceholderText(f"(auto) {auto_x}")
+        self.xname_edit.setPlaceholderText(f"(auto) {auto_x}")
         self.ylabel_edit.setPlaceholderText(f"(auto) {auto_y}" if auto_y else "(none)")
         ax.set_title(self.title_edit.text() or auto_title, fontsize=fs + 2)
         ax.set_xlabel(self.xlabel_edit.text() or auto_x, fontsize=fs)
@@ -889,11 +930,15 @@ class PlotTab(QWidget):
     def _draw_marks(self) -> None:
         fs = self._font()
         for mark in self.region_marks:
-            mark.artists = [self.ax.axvspan(mark.xmin, mark.xmax, color=mark.color,
-                                            alpha=0.2, zorder=0, linewidth=0)]
+            selected = id(mark) in self._selected_marks
+            mark.artists = [self.ax.axvspan(
+                mark.xmin, mark.xmax, facecolor=mark.color, alpha=0.38 if selected else 0.2,
+                zorder=0.5 if selected else 0, edgecolor=mark.color if selected else "none",
+                linewidth=2 if selected else 0, linestyle="--")]
         for mark in self.point_marks:
-            (dot,) = self.ax.plot([mark.x], [mark.y], marker="o", markersize=9,
-                                  markerfacecolor="none", markeredgewidth=2,
+            selected = id(mark) in self._selected_marks
+            (dot,) = self.ax.plot([mark.x], [mark.y], marker="o", markersize=13 if selected else 9,
+                                  markerfacecolor="none", markeredgewidth=3 if selected else 2,
                                   color=mark.color, zorder=5, scalex=False, scaley=False)
             ann = self.ax.annotate(
                 mark.text, (mark.x, mark.y), xytext=mark.offset, textcoords="offset points",
@@ -1018,9 +1063,58 @@ class PlotTab(QWidget):
                 return mark
         return None
 
+    def _region_hit(self, event):
+        """(region, "left" | "right" | "move") under the mouse, preferring selected regions."""
+        if event.xdata is None:
+            return None, None
+        ordered = sorted(reversed(self.region_marks), key=lambda m: id(m) not in self._selected_marks)
+        for mark in ordered:
+            left = self.ax.transData.transform((mark.xmin, 0))[0]
+            right = self.ax.transData.transform((mark.xmax, 0))[0]
+            left, right = min(left, right), max(left, right)
+            if abs(event.x - left) <= EDGE_GRAB_PX:
+                return mark, "left"
+            if abs(event.x - right) <= EDGE_GRAB_PX:
+                return mark, "right"
+            if left < event.x < right:
+                return mark, "move"
+        return None, None
+
+    def _rename_label_at(self, event) -> bool:
+        """Double-click on the title or an axis label: rename it."""
+        targets = ((self.ax.title, self.title_edit, "Title"),
+                   (self.ax.xaxis.label, self.xlabel_edit, "X axis name"),
+                   (self.ax.yaxis.label, self.ylabel_edit, "Y axis name"))
+        for text, edit, what in targets:
+            if text.get_visible() and text.contains(event)[0]:
+                name, ok = QInputDialog.getText(self, f"Rename {what.lower()}",
+                                                f"{what} (empty for automatic):",
+                                                QLineEdit.Normal, edit.text() or text.get_text())
+                if ok:
+                    edit.setText(name.strip())
+                    self.redraw()
+                return True
+        return False
+
     def _on_press(self, event) -> None:
-        if event.inaxes is not self.ax or self.toolbar.mode != _Mode.NONE:
+        if self.toolbar.mode != _Mode.NONE:
             return
+        if event.dblclick and event.button == 1 and self._rename_label_at(event):
+            return
+        if event.inaxes is not self.ax:
+            return
+        if event.button == 1 and not event.dblclick:
+            mark, kind = self._region_hit(event)
+            # Without a marking tool any region can be grabbed; with one, only
+            # the selected region (so new marks can still be made on top of others).
+            if mark is not None and (self._mark_mode() is None or id(mark) in self._selected_marks):
+                self.select_mark(mark)
+                self._drag = dict(mark=mark, kind=kind, x0=event.xdata,
+                                  xmin=mark.xmin, xmax=mark.xmax)
+                if self._span is not None:
+                    self._span.set_active(False)
+                self.redraw()
+                return
         if event.button == 3:
             mark = self._mark_at(event)
             if mark is not None:
@@ -1038,7 +1132,22 @@ class PlotTab(QWidget):
         self.point_marks.append(PointMark(float(x), float(y), self.mark_color.color))
         self._after_marks_changed()
 
+    def _on_mark_selection(self) -> None:
+        self._selected_marks = {id(i.data(Qt.UserRole)) for i in self.marks_list.selectedItems()}
+        self.redraw()
+
+    def select_mark(self, mark) -> None:
+        self._selected_marks = {id(mark)}
+        self.marks_list.blockSignals(True)
+        for i in range(self.marks_list.count()):
+            item = self.marks_list.item(i)
+            item.setSelected(item.data(Qt.UserRole) is mark)
+        self.marks_list.blockSignals(False)
+
     def _after_marks_changed(self) -> None:
+        alive = {id(m) for m in [*self.point_marks, *self.region_marks]}
+        self._selected_marks &= alive
+        self.marks_list.blockSignals(True)
         self.marks_list.clear()
         for mark in self.point_marks:
             item = QListWidgetItem(f"Point  {mark.text}")
@@ -1050,6 +1159,10 @@ class PlotTab(QWidget):
             item.setForeground(QColor(mark.color))
             item.setData(Qt.UserRole, mark)
             self.marks_list.addItem(item)
+        for i in range(self.marks_list.count()):
+            item = self.marks_list.item(i)
+            item.setSelected(id(item.data(Qt.UserRole)) in self._selected_marks)
+        self.marks_list.blockSignals(False)
         self.redraw()
 
     def _remove_selected_marks(self) -> None:
@@ -1064,14 +1177,62 @@ class PlotTab(QWidget):
         self._after_marks_changed()
 
     # ---------------------------------------------------------------- mouse
+    def _on_release(self, event) -> None:
+        if self._drag is None:
+            return
+        mark = self._drag["mark"]
+        mark.xmin, mark.xmax = sorted((mark.xmin, mark.xmax))
+        self._drag = None
+        if self._span is not None:
+            self._span.set_active(self.act_mark_region.isChecked())
+        self._after_marks_changed()
+
+    def _drag_region(self, event) -> None:
+        d, mark = self._drag, self._drag["mark"]
+        dx = event.xdata - d["x0"]
+        if d["kind"] == "move":
+            mark.xmin, mark.xmax = d["xmin"] + dx, d["xmax"] + dx
+        elif d["kind"] == "left":
+            mark.xmin = d["xmin"] + dx
+        else:
+            mark.xmax = d["xmax"] + dx
+        patch = mark.artists[0] if mark.artists else None
+        if hasattr(patch, "set_x") and hasattr(patch, "set_width"):
+            lo, hi = sorted((mark.xmin, mark.xmax))
+            patch.set_x(lo)
+            patch.set_width(hi - lo)
+            self.canvas.draw_idle()
+        else:
+            self.redraw()
+        self.coord_label.setText(f"Region  {mark.xmin:.6g} → {mark.xmax:.6g}")
+
+    def _update_cursor(self, event) -> None:
+        mark, kind = self._region_hit(event)
+        grabbable = mark is not None and (self._mark_mode() is None or id(mark) in self._selected_marks)
+        if grabbable:
+            self.canvas.setCursor(Qt.SizeHorCursor if kind in ("left", "right") else Qt.OpenHandCursor)
+        else:
+            self.canvas.setCursor(Qt.CrossCursor if self._mark_mode() else Qt.ArrowCursor)
+
     def _on_motion(self, event) -> None:
+        if self._drag is not None and event.xdata is not None:
+            self._drag_region(event)
+            return
         if event.inaxes is not self.ax or event.xdata is None:
             return
+        if self.toolbar.mode == _Mode.NONE:
+            self._update_cursor(event)
         text = f"x = {event.xdata:<12.6g}  y = {event.ydata:<12.6g}"
         if self._data_lines:
             x, y, line, dist = self._nearest_data_point(event)
             if line is not None and dist < 40:
-                text += f"   │  nearest {line.get_label()}: ({x:.6g}, {y:.6g})"
+                s = self._line_series.get(line)
+                if s is not None and (s.x_offset or s.y_offset):
+                    # Report the data value, not the shifted position.
+                    x, y = x - s.x_offset, y - s.y_offset
+                    text += f"   │  nearest {line.get_label()} (data, offset removed): ({x:.6g}, {y:.6g})"
+                else:
+                    text += f"   │  nearest {line.get_label()}: ({x:.6g}, {y:.6g})"
         self.coord_label.setText(text)
 
     def _on_pick(self, event) -> None:
@@ -1157,21 +1318,38 @@ class PlotTab(QWidget):
         if self.data_preview is None:
             self.data_preview = DataPreview(self.datasets)
             self.data_preview.closeRequested.connect(self.close_data_preview)
-            self.views.addTab(self.data_preview, "Data")
+            self.data_preview.layout_button.clicked.connect(self.toggle_data_layout)
+            self.views.addWidget(self.data_preview)
+            total = sum(self.views.sizes()) or 800
+            self.views.setSizes([int(total * 0.6), int(total * 0.4)])
+            self._update_layout_button()
         if focus:
-            self.views.setCurrentWidget(self.data_preview)
+            self.data_preview.table.setFocus()
         self.act_data.blockSignals(True)
         self.act_data.setChecked(True)
         self.act_data.blockSignals(False)
 
     def close_data_preview(self) -> None:
         if self.data_preview is not None:
-            self.views.removeTab(self.views.indexOf(self.data_preview))
+            self.data_preview.setParent(None)
             self.data_preview.deleteLater()
             self.data_preview = None
         self.act_data.blockSignals(True)
         self.act_data.setChecked(False)
         self.act_data.blockSignals(False)
+
+    def toggle_data_layout(self) -> None:
+        """Switch the data table between below the plot and beside it."""
+        vertical = self.views.orientation() == Qt.Vertical
+        self.views.setOrientation(Qt.Horizontal if vertical else Qt.Vertical)
+        total = sum(self.views.sizes()) or 800
+        self.views.setSizes([int(total * 0.6), int(total * 0.4)])
+        self._update_layout_button()
+
+    def _update_layout_button(self) -> None:
+        if self.data_preview is not None:
+            below = self.views.orientation() == Qt.Vertical
+            self.data_preview.layout_button.setText("Place beside plot" if below else "Place below plot")
 
     def toggle_data_preview(self) -> None:
         if self.data_preview is None:

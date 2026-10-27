@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
                                  "Move the current plot into its own movable window")
         self.act_controls = action("Show/hide &controls panel", self.toggle_controls, "Ctrl+B")
         self.act_data = action("Show/hide &data table", self.toggle_data, "Ctrl+T",
-                               "Show the current file's raw values in a tab next to the plot")
+                               "Show the raw values next to the plot (below or beside it)")
         self.act_data_auto = QAction("Open data table with new &files", self, checkable=True)
         self.act_data_auto.setStatusTip("Also open the data table automatically when a file is opened")
         self.act_data_auto.setChecked(self.settings.value("data_table_auto", False, type=bool))
