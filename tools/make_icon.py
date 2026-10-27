@@ -26,11 +26,11 @@ def polyline(xs, ys):
 
 def main():
     t = np.linspace(0, 1, 600)
-    cx, top = SIZE * 0.5, SIZE * 0.27
+    cx, top = SIZE * 0.5, SIZE * 0.31
 
     # Small echo: horizontal, zero crossing at the centre.
-    hx = SIZE * (0.15 + 0.70 * t)
-    hy = top + SIZE * 0.09 * bipolar((t - 0.5) / 0.065)
+    hx = SIZE * (0.29 + 0.42 * t)
+    hy = top + SIZE * 0.13 * bipolar((t - 0.5) / 0.085)
 
     # Big echo: vertical, starting at the small echo's midpoint.
     vy = top + (SIZE * 0.88 - top) * t
