@@ -628,3 +628,47 @@ def test_session_keeps_fft_settings(window, tmp_path, monkeypatch):
     assert getattr(tab, "fft_dialog", None) is None and tab._fft_state["window"] == "Kaiser"
     tab.open_fft()
     assert tab.fft_dialog.window_param.value() == 12.5
+
+
+def test_fit_dialog_and_outputs(window, tmp_path, monkeypatch):
+    from csvplot.export import save_figure
+    from csvplot.plot_tab import RegionMark
+    from csvplot.session import save_session
+
+    tab = window.current_tab()
+    tab.region_marks.append(RegionMark(455, 500, "#CC088A"))
+    tab._after_marks_changed()
+    tab.open_fit()
+    d = tab.fit_dialog
+    d.series_combo.setCurrentText("dR_over_R")
+    tab.ax.set_xlim(2, 600)                  # after the jump at t = 0
+    d.range_combo.setCurrentText("Current view (x range on screen)")
+    d.pieces.setValue(10)
+    d.exclude.setChecked(True)
+    d.run()
+    r = d.results[0]
+    assert not r.used[(r.x > 460) & (r.x < 495)].any()
+    assert d.rows()[0][2] == 10 and d.rows()[0][5] > 0.99
+    save_figure(d.figure, str(tmp_path / "fit.pdf"), (6, 5), 200, "White", d.export_style, 9)
+
+    n_series = len(tab.series)
+    d.add_to_plot()
+    assert d.series_combo.currentText() == "dRR_Ti_10nm: dR_over_R"   # still the same line
+    labels = [tab._series_label(s) for s in tab.series[n_series:]]
+    assert any(label.endswith("dR_over_R fit") for label in labels)
+    assert any(label.endswith("dR_over_R residual") for label in labels)
+
+    d.analyse_residual()
+    new = window.current_tab()
+    assert new is not tab and new.fft_dialog.results
+    assert new.datasets[0].frame.columns[1] == "dR_over_R residual"
+
+    # Settings are saved with the session.
+    path = tmp_path / "s.csvplot"
+    save_session(window, path)
+    window.close_all()
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *a, **k: None)
+    window.open_session(path)
+    restored = window.tabs.widget(0).fit_dialog
+    assert restored.pieces.value() == 10 and restored.exclude.isChecked()
+    assert restored.series_combo.currentText() == "dRR_Ti_10nm: dR_over_R"

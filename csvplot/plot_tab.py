@@ -210,7 +210,9 @@ class PlotTab(QWidget):
 
     statusMessage = Signal(str)
     viewChanged = Signal()                 # x/y limits changed (zoom, pan, ranges)
-    openDatasetRequested = Signal(object)  # e.g. a spectrum to open as a new plot
+    # (Dataset, options) e.g. a spectrum to open as a new plot; options may
+    # contain {"fft": True} to open the new plot's spectral analysis.
+    openDatasetRequested = Signal(object, object)
 
     def __init__(self, dataset: Dataset, parent=None):
         super().__init__(parent)
@@ -230,6 +232,7 @@ class PlotTab(QWidget):
         self._math_errors: list[str] = []
         self._loading = False   # restoring a session: skip intermediate redraws
         self._fft_state: dict | None = None   # analysis settings waiting for the window
+        self._fit_state: dict | None = None
         self.series: list[Series] = []
         self.point_marks: list[PointMark] = []
         self.region_marks: list[RegionMark] = []
@@ -285,6 +288,11 @@ class PlotTab(QWidget):
         self.act_fft.setToolTip("Windowed FFT / Welch / spectrogram and period extraction")
         self.act_fft.triggered.connect(self.open_fft)
         self.tools_bar.addAction(self.act_fft)
+        self.act_fit = QAction("Background fit / echoes", self)
+        self.act_fit.setToolTip("Fit the background with piecewise polynomials and subtract it\n"
+                                "to extract echoes")
+        self.act_fit.triggered.connect(self.open_fit)
+        self.tools_bar.addAction(self.act_fit)
         self.apply_toolbar_icons()
         self.act_mark_point.toggled.connect(lambda on: self._set_mark_mode("point", on))
         self.act_mark_region.toggled.connect(lambda on: self._set_mark_mode("region", on))
@@ -1601,19 +1609,29 @@ class PlotTab(QWidget):
         self.act_data.setChecked(False)
         self.act_data.blockSignals(False)
 
+    def _open_analysis(self, attr: str, state_attr: str, cls) -> None:
+        dialog = getattr(self, attr, None)
+        if dialog is None:
+            dialog = cls(self)
+            setattr(self, attr, dialog)
+            if getattr(self, state_attr):   # settings restored from a session
+                dialog.apply_state(getattr(self, state_attr))
+                setattr(self, state_attr, None)
+        else:
+            dialog.refresh_choices()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def open_fft(self) -> None:
         from .fft_dialog import FFTDialog  # imported lazily: pulls in scipy
 
-        if getattr(self, "fft_dialog", None) is None:
-            self.fft_dialog = FFTDialog(self)
-            if self._fft_state:   # settings restored from a session
-                self.fft_dialog.apply_state(self._fft_state)
-                self._fft_state = None
-        else:
-            self.fft_dialog.refresh_choices()
-        self.fft_dialog.show()
-        self.fft_dialog.raise_()
-        self.fft_dialog.activateWindow()
+        self._open_analysis("fft_dialog", "_fft_state", FFTDialog)
+
+    def open_fit(self) -> None:
+        from .fit_dialog import FitDialog
+
+        self._open_analysis("fit_dialog", "_fit_state", FitDialog)
 
     def toggle_data_layout(self) -> None:
         """Switch the data table between below the plot and beside it."""
@@ -1703,6 +1721,8 @@ class PlotTab(QWidget):
                 "below" if self.views.orientation() == Qt.Vertical else "beside"),
             "analysis": (self.fft_dialog.get_state() if getattr(self, "fft_dialog", None)
                          else self._fft_state),
+            "background_fit": (self.fit_dialog.get_state() if getattr(self, "fit_dialog", None)
+                               else self._fit_state),
         }
 
     def apply_state(self, state: dict) -> None:
@@ -1769,6 +1789,10 @@ class PlotTab(QWidget):
             self._fft_state = dict(state["analysis"])
             if self._fft_state.get("open"):
                 self.open_fft()
+        if state.get("background_fit"):
+            self._fit_state = dict(state["background_fit"])
+            if self._fit_state.get("open"):
+                self.open_fit()
 
     def save_figure(self) -> str | None:
         name = self.custom_name or "_".join(d.path.stem for d in self.datasets)

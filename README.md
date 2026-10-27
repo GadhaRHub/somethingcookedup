@@ -142,6 +142,32 @@ You can also drag files onto the window.
 
 Uneven x spacing is resampled onto a uniform grid, and the window says so.
 
+## Background fit and echo extraction
+
+*Background fit / echoes* in the plot's second toolbar row, or **Analysis → Background
+fit / echo extraction…** (Ctrl+Shift+B), fits the slow background with polynomials and
+subtracts it, leaving the fast features (the echoes) in the residual.
+
+- **Polynomials**: the range is split into N pieces, each fitted with its own polynomial.
+- **Degrees**: give a range, e.g. 1 to 5. Each degree is tried and the best is kept by
+  **BIC** (prefers simpler curves, so it stays on the background) or **AIC**, or you
+  can always use the maximum.
+- **Model**:
+  - *Spline*: the pieces are joined smoothly, with no steps or kinks. Degree up to 5.
+  - *Independent pieces*: each piece fitted on its own, blended over an adjustable
+    overlap where pieces meet. The table lists the degree chosen for each piece.
+  - *Single polynomial*: one polynomial over the whole range.
+- **Leave marked regions out of the fit**: mark the echoes as regions first, so the
+  background can't bend to follow them. Left-out regions are shaded.
+- **Residual**: data − fit or fit − data.
+- **Output**: the summary table (degrees, RMS of the residual, R²), figure export, a CSV
+  of data, fit and residual. You can also add the fit and residual to the current plot,
+  open the residual as a new plot, or **Analyse residual (FFT)**: this opens the
+  residual with the spectral analysis already running, to get the echo periods.
+
+Lines, range (current view, full, marked region) and session saving work as in the
+spectral analysis window.
+
 ## Icon
 
 The app icon shows two bipolar (derivative-of-Gaussian) echo pulses. The small echo
