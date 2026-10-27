@@ -308,6 +308,12 @@ def stylesheet(t: Theme | None = None) -> str:
     }}
 
     QLabel#hint {{ color: {t.muted}; }}
+    QToolButton#info {{
+        background: {t.soft_light}; color: {t.text}; border: 1px solid {t.border};
+        border-radius: 10px; font-weight: bold; font-style: italic; font-family: serif;
+        padding: 0;
+    }}
+    QToolButton#info:hover {{ background: {t.accent}; color: white; border-color: {t.accent}; }}
     QToolButton#symbols {{
         background: {t.input}; color: {t.text}; border: 1px solid {t.border};
         border-radius: 11px; padding: 6px 14px; font-weight: 600;

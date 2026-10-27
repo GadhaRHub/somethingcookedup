@@ -643,19 +643,24 @@ def test_fit_dialog_and_outputs(window, tmp_path, monkeypatch):
     d.series_combo.setCurrentText("dR_over_R")
     tab.ax.set_xlim(2, 600)                  # after the jump at t = 0
     d.range_combo.setCurrentText("Current view (x range on screen)")
+    d.model.setCurrentText("Spline (smoothly joined polynomials)")
     d.pieces.setValue(10)
     d.exclude.setChecked(True)
     d.run()
     r = d.results[0]
     assert not r.used[(r.x > 460) & (r.x < 495)].any()
-    assert d.rows()[0][2] == 10 and d.rows()[0][5] > 0.99
+    assert d.rows()[0][5] > 0.99                                     # R² of the background
+    # Removing the oscillations leaves a clearly smaller residual than the background step.
+    assert d.rows()[0][4] < 0.8 * d.rows()[0][3]
+    assert d.results[0].oscillations is not None
     save_figure(d.figure, str(tmp_path / "fit.pdf"), (6, 5), 200, "White", d.export_style, 9)
 
     n_series = len(tab.series)
     d.add_to_plot()
     assert d.series_combo.currentText() == "dRR_Ti_10nm: dR_over_R"   # still the same line
     labels = [tab._series_label(s) for s in tab.series[n_series:]]
-    assert any(label.endswith("dR_over_R fit") for label in labels)
+    assert any(label.endswith("dR_over_R background") for label in labels)
+    assert any(label.endswith("dR_over_R oscillations") for label in labels)
     assert any(label.endswith("dR_over_R residual") for label in labels)
 
     d.analyse_residual()

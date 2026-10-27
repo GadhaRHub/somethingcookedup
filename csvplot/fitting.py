@@ -18,7 +18,11 @@ import numpy as np
 from numpy.polynomial import Polynomial
 from scipy.interpolate import make_lsq_spline
 
+from .background import double_exponential
+from .oscillations import OscillationSettings, remove_oscillations
+
 MODELS = {
+    "Double exponential a·e^(bx) + c·e^(dx)": "exp2",
     "Spline (smoothly joined polynomials)": "spline",
     "Independent pieces (blended at the joins)": "pieces",
     "Single polynomial": "single",
@@ -50,6 +54,9 @@ class FitSettings:
     blend: float = 20.0                 # % of a piece's width used to blend neighbours
     exclude: list[tuple[float, float]] = field(default_factory=list)
     residual: str = "data-fit"
+    force_decay: bool = True            # double exponential: keep both rates ≤ 0
+    # Oscillations (e.g. Brillouin) removed after the background; None = keep them.
+    oscillations: OscillationSettings | None = None
 
 
 @dataclass
@@ -66,6 +73,13 @@ class FitResult:
     r2: float = float("nan")
     # Weighted average only: {degree: weight} per piece (one entry for a spline/single).
     weights: list[dict[int, float]] = field(default_factory=list)
+    oscillations: np.ndarray | None = None      # fitted oscillations (if removed)
+    osc_windows: list = field(default_factory=list)   # (window start, frequencies found)
+    exp_params: tuple | None = None             # double exponential (a, b, c, d)
+
+    @property
+    def background_removed(self) -> np.ndarray:
+        return self.y - self.fit
 
     @property
     def degree_text(self) -> str:
@@ -77,6 +91,8 @@ class FitResult:
                     total[deg] = total.get(deg, 0.0) + w / len(self.weights)
             ranked = sorted(total.items(), key=lambda kv: -kv[1])
             return "avg: " + ", ".join(f"{d} ({100 * w:.0f}%)" for d, w in ranked if w >= 0.005)
+        if not self.degrees:
+            return "–"
         if len(set(self.degrees)) == 1:
             return str(self.degrees[0])
         return ", ".join(map(str, self.degrees))
@@ -188,7 +204,11 @@ def fit_background(x, y, settings: FitSettings, label: str = "",
     pieces = 1 if settings.model == "single" else max(1, int(settings.pieces))
     edges = np.linspace(x[0], x[-1], pieces + 1)
 
-    if settings.model == "spline":
+    exp_params = None
+    if settings.model == "exp2":
+        fit, exp_params = double_exponential(x, y, settings.force_decay, fit_mask=used)
+        choices, edges = [], np.array([x[0], x[-1]])
+    elif settings.model == "spline":
         fit, choices = _fit_spline(x, xu, yu, edges, settings)
     elif settings.model == "pieces":
         fit, choices = _fit_pieces(x, xu, yu, edges, settings)
@@ -199,16 +219,22 @@ def fit_background(x, y, settings: FitSettings, label: str = "",
             raise ValueError("Too few points for the chosen degrees.")
         fit, choices = choice.curve(x), [choice]
 
-    data_minus_fit = y - fit
+    background_removed = y - fit
+    osc, osc_windows = None, []
+    if settings.oscillations is not None:
+        found = remove_oscillations(x, background_removed, settings.oscillations)
+        osc, osc_windows = found.curve, found.windows
+    data_minus_fit = background_removed - (osc if osc is not None else 0.0)
     residual = data_minus_fit if settings.residual == "data-fit" else -data_minus_fit
-    r_used = data_minus_fit[used]
+    r_used = background_removed[used]
     rms = float(np.sqrt(np.mean(r_used ** 2)))
     ss_tot = float(np.sum((yu - yu.mean()) ** 2))
     r2 = 1 - float(np.sum(r_used ** 2)) / ss_tot if ss_tot > 0 else float("nan")
     degrees = [c.degree if c is not None else -1 for c in choices]
     weights = ([c.weights for c in choices if c is not None]
                if is_average(settings.criterion) else [])
-    return FitResult(label, x, y, fit, residual, used, degrees, edges, rms, r2, weights)
+    return FitResult(label, x, y, fit, residual, used, degrees, edges, rms, r2, weights,
+                     osc, osc_windows, exp_params)
 
 
 def _fit_pieces(x, xu, yu, edges, settings):

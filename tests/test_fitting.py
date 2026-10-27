@@ -79,3 +79,36 @@ def test_weighted_average_is_the_weighted_sum():
     by_fit = fit_background(x, y, FitSettings(model="single", degree_min=1, degree_max=3,
                                               criterion="avg_fit"))
     assert max(by_fit.weights[0], key=by_fit.weights[0].get) == 3
+
+
+def test_oscillations_are_removed_to_reveal_the_echo():
+    from csvplot.oscillations import OscillationSettings
+
+    # Background + two "Brillouin" oscillations everywhere + one short echo.
+    osc = 2e-3 * np.sin(2 * np.pi * X / 30) * np.exp(-X / 800) + 1e-3 * np.sin(2 * np.pi * X / 7)
+    y = BACKGROUND + osc + ECHO
+    without = fit_background(X, y, FitSettings(model="exp2"))
+    with_osc = fit_background(X, y, FitSettings(model="exp2", oscillations=OscillationSettings(
+        window=60, overlap=20)))
+    err_without = np.sqrt(np.mean((without.residual - ECHO) ** 2))
+    err_with = np.sqrt(np.mean((with_osc.residual - ECHO) ** 2))
+    assert err_with < 0.3 * err_without           # the oscillations are mostly gone
+    freqs = {round(f, 3) for _, fs in with_osc.osc_windows for f in fs}
+    assert any(abs(f - 1 / 30) < 0.004 for f in freqs) and any(abs(f - 1 / 7) < 0.004 for f in freqs)
+    # Only removing a band keeps the other oscillation.
+    band = fit_background(X, y, FitSettings(model="exp2", oscillations=OscillationSettings(
+        window=60, overlap=20, bands=[(0.12, 0.16)])))
+    found = {round(f, 3) for _, fs in band.osc_windows for f in fs}
+    assert found and all(0.12 <= f <= 0.16 for f in found)
+
+
+def test_double_exponential_matches_the_notebook_model():
+    from csvplot.background import double_exponential
+
+    t = np.linspace(10, 600, 3000)
+    y = -3.07 * np.exp(-0.0056 * t) + 3.37 * np.exp(-0.0009 * t)
+    fit, params = double_exponential(t, y)
+    assert np.max(np.abs(fit - y)) < 1e-6
+    assert params is not None and params[1] <= 0 and params[3] <= 0
+    result = fit_background(t, y + 0.01 * np.sin(t), FitSettings(model="exp2"))
+    assert result.exp_params is not None and result.degree_text == "–"
